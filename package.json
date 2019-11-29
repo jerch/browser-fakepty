@@ -1,0 +1,38 @@
+{
+  "name": "browser-fakepty",
+  "version": "0.0.1",
+  "description": "A fake pty implementation for in-browser xterm.js usage.",
+  "main": "./lib/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "tsc": "tsc",
+    "watch": "tsc -w",
+    "lint": "tslint 'src/**/*.ts'",
+    "start": "webpack-cli && http-server",
+    "prepublish": "npm run tsc",
+    "coverage": "nyc --reporter=lcov --reporter=text --reporter=html npm test",
+    "benchmark": "xterm-benchmark $*"
+  },
+  "keywords": [
+    "pty",
+    "browser",
+    "pseudoterminal",
+    "xterm.js"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "xterm": "^4.2.0-vscode1"
+  },
+  "devDependencies": {
+    "@types/minimist": "^1.2.0",
+    "chalk": "^3.0.0",
+    "http-server": "^0.11.1",
+    "node-pty": "^0.9.0",
+    "node-termios": "^0.0.13",
+    "ts-loader": "^6.2.1",
+    "typescript": "^3.7.2",
+    "webpack": "^4.41.2",
+    "webpack-cli": "^3.3.10"
+  }
+}
