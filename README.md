@@ -1,8 +1,8 @@
-# fake-pty for browser env.
+## fake-pty for browser env.
 
 This library tries to mimick parts of POSIX's tty interface to be used with xterm.js in local browser mode.
 
-## TODO:
+### TODO:
 - identify useable/unusable termios entries
   - get ICANON on par with linux
   - job control?
@@ -15,9 +15,9 @@ This library tries to mimick parts of POSIX's tty interface to be used with xter
 - define & cleanup interfaces
 - tests
 
-## State:
+### State:
 This is in an early alpha state, thus dont expect anything being usable or stable yet.
 
-## Early testing:
+### Early testing:
 
 Run `npm install && npm start` and open your browser at `localhost:8080`. There is an early version of a shell, that can execute commands defined in `src/Shell.ts`.
