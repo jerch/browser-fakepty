@@ -86,7 +86,7 @@ export interface ITermios {
   cc: CC;
 }
 
-export const TERMIOS_COOKED: ITermios = {
+export const TERMIOS_COOKED: ITermios = Object.freeze({
   iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
   oflags: OFlags.OPOST | OFlags.ONLCR,
   lflags: LFlags.ECHOKE | LFlags.ECHOCTL | LFlags.ECHOK | LFlags.ECHOE | LFlags.ECHO |
@@ -109,7 +109,7 @@ export const TERMIOS_COOKED: ITermios = {
     VTIME: 0,
     VWERASE: 23
   }
-}
+});
 
 export const TERMIOS_CBREAK: ITermios = {
   iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
@@ -158,3 +158,9 @@ export const TERMIOS_RAW: ITermios = {
     VWERASE: 23
   }
 };
+
+export const enum When {
+  TCSANOW,
+  TCSADRAIN,
+  TCSAFLUSH
+}

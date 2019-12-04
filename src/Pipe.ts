@@ -122,6 +122,7 @@ export class Pipe implements IPipe {
   private _drainHandlers: (() => void)[] = [];
   private _buf: any[] = [];
   public closed = false;
+  private _scheduledClose = false;
   public writable = true;
   private _pending = false;
 
@@ -214,11 +215,15 @@ export class Pipe implements IPipe {
 
     // handle single chunk in readers as promise setTimeout chain
     Promise.all(this._readers.slice().map(el => new Promise(resolve => el.handleChunk(data, resolve)))).then(
-      () => { if (this._buf.length) setTimeout(() => this._handle(), 0); else this._pending = false; },
-      () => { if (this._buf.length) setTimeout(() => this._handle(), 0); else this._pending = false; }
+      () => { if (this._buf.length) setTimeout(() => this._handle(), 0); else { if (this._scheduledClose) this.close(); this._pending = false; } },
+      () => { if (this._buf.length) setTimeout(() => this._handle(), 0); else { if (this._scheduledClose) this.close(); this._pending = false; } }
     );
 
     // update writable flag
+    if (this.closed || this._scheduledClose) {
+      this.writable = false;
+      return;
+    }
     const w = this.writable;
     if (!w) {
       this.writable = this._buf.length <= MIN_LIMIT;
@@ -278,8 +283,12 @@ export class Pipe implements IPipe {
     if (~idx) {
       this._writers.splice(idx, 1);
       // last writer gone
-      if (!this._writers.length && !this._buf.length && !this.closed) {
-        this.close();
+      if (!this._writers.length && !this.closed) {
+        if (!this._buf.length) {
+          this.close();
+        } else {
+          this._scheduledClose = true;
+        }
       }
     }
   }

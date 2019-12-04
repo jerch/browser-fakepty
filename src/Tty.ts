@@ -1,5 +1,5 @@
 import { IPipe, IDisposable, IPipeReader, IPipeWriter, PipeReader, Pipe, getLogPipe } from './Pipe';
-import { ITermios, TERMIOS_COOKED, IFlags, LFlags, OFlags } from './Termios';
+import { ITermios, TERMIOS_COOKED, IFlags, LFlags, OFlags, When } from './Termios';
 import { Encoder, Decoder } from './utf8';
 import { ProcessMain, Process } from './Process';
 import { FakeShell } from './Shell';
@@ -35,6 +35,7 @@ class TtyWriter implements ITtyWriter {
     this._closed = true;
   }
   public write(data: any): boolean {
+    if (this._closed) console.log('closed writer got:', [data]);
     if (this._closed) throw new Error('writer already closed');
     return this._tty.insertData(data);
   }
@@ -223,8 +224,9 @@ class Tty implements IPipe {
 
   public writeToProcess(data: Uint8Array): void {
     const decoded = this._decoder.decode(data);
-    for (let i = 0; i < this._readers.length; ++i) {
-      this._readers[i].handleChunk(decoded, success => {});
+    const handlers = this._readers.slice();
+    for (let i = 0; i < handlers.length; ++i) {
+      handlers[i].handleChunk(decoded, success => {});
     }
   }
 
@@ -287,9 +289,11 @@ class Tty implements IPipe {
   }
   public pause(): void {
     // XON/XOFF
+    console.log('tty should pause');
   }
   public resume(): void {
     // XON/XOFF
+    console.log('tty should resume');
   }
   private _handleMasterOutput(data: string, callback: (success: boolean) => void) {
     // line discipline OUTPUT
@@ -373,12 +377,19 @@ enum TtySignal {
   SIGTSTP = 20
 }
 
+/**
+ * Inspired from linux n_tty
+ * @see https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c#L1359
+ */
 class LDisc {
   private _buf = new Uint8Array(MAX_LIMIT);
   private _bufEcho = new Uint8Array(MAX_LIMIT);
+  private _bufOut = new Uint8Array(MAX_LIMIT);
   private _curW = 0;
   private _curR = 0;
   private _curE = 0;
+  private _curO = 0;
+  private _lnext = false;
   constructor(public tty: Tty) {}
 
   private output(): void {}
@@ -402,11 +413,11 @@ class LDisc {
       let c = data[i];
       if (iflags & IFlags.ISTRIP) c &= 0xFF;
       if (iflags & IFlags.IXON) {
-        if (c === cc.VSTOP) {
+        if (c === cc.VSTOP && !this._lnext) {
           this.tty.pause();
           continue;
         }
-        if (c === cc.VSTART) {
+        if (c === cc.VSTART && !this._lnext) {
           this.tty.resume();
           continue;
         }
@@ -415,13 +426,13 @@ class LDisc {
           // continue;      // FIXME: need to consume char here?
         }
       }
-      if (lflags & LFlags.ISIG) {
+      if (lflags & LFlags.ISIG && !this._lnext) {
         // FIXME: flush needed here?
         if (c === cc.VINTR) { this._flush(); this.tty.signal(TtySignal.SIGINT); continue; }
         if (c === cc.VQUIT) { this._flush(); this.tty.signal(TtySignal.SIGQUIT); continue; }
         if (c === cc.VSUSP) { this._flush(); this.tty.signal(TtySignal.SIGTSTP); continue; }
       }
-      if (c === 13) {
+      if (c === 13 && !this._lnext) {
         if (iflags & IFlags.IGNCR) continue;
         if (iflags & IFlags.ICRNL) c = 10;                  // \r -> \n
       } else if (c === 10 && iflags & IFlags.INLCR) c = 13; // \n -> \r
@@ -431,24 +442,86 @@ class LDisc {
           this._erase(c);
           continue;
         }
+        // FIXME: check lnext in other branches
+        if (c === cc.VLNEXT && lflags & LFlags.IEXTEN && !this._lnext) {
+          if (lflags & LFlags.ECHO) {
+            if (lflags & LFlags.ECHOCTL) {
+              this._bufEcho[this._curE++] = '^'.charCodeAt(0);
+              this._bufEcho[this._curE++] = '\b'.charCodeAt(0);
+            }
+          }
+          this._lnext = true;
+          continue;
+        }
 
-        // quickhack to get \n working
-        if(c === 10) {
-          this._buf[this._curW++] = c;
-          this._bufEcho[0] = c;
-          this.tty.writeToDevice(this._bufEcho.subarray(0, 1)); //---grrrr why disabled?
+        if (c === cc.VREPRINT && lflags & LFlags.ECHO && lflags & LFlags.IEXTEN && !this._lnext) {
+          this._bufEcho[this._curE++] = '^'.charCodeAt(0);
+          this._bufEcho[this._curE++] = c + 0x40;
+          this._bufEcho[this._curE++] = '\n'.charCodeAt(0);
+          this._bufEcho.set(this._bufOut.subarray(0, this._curO), this._curE);
+          this._curE += this._curO;
+          this.tty.writeToDevice(this._bufEcho.subarray(0, this._curE));
+          this._curE = 0;
+          continue;
+        }
+
+        if (c === 10 && !this._lnext) {
+          if (lflags & LFlags.ECHO || lflags & LFlags.ECHONL) {
+            this._buf[this._curW++] = c;
+            this._bufEcho[0] = c;
+            this.tty.writeToDevice(this._bufEcho.subarray(0, 1));
+          }
           this.tty.writeToProcess(this._buf.subarray(0, this._curW));
           this._curE = 0;
           this._curR = 0;
           this._curW = 0;
+          this._curO = 0;
+          continue;
+        }
+
+        if (c === cc.VEOF && !this._lnext) {
+          this.tty.writeToProcess(this._buf.subarray(0, this._curW));
+          console.log('should send EOF mark'); // TODO: implement end event on pipe readers
+          // TODO: always split upcoming data into new onData event, the old consumer has to be gone by that
+          // this needs several tweaks on the pipe interfaces
+          this._curE = 0;
+          this._curR = 0;
+          this._curW = 0;
+          this._curO = 0;
+          continue;
+        }
+
+        if ((c === cc.VEOL || (c === cc.VEOL2 && lflags & LFlags.IEXTEN)) && !this._lnext) {
+          // see https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c#L1359
+          // unclear whether EOL/EOL2 should be echoed at all
+          if (lflags & LFlags.ECHO) {
+            this._buf[this._curW++] = c;
+            this._bufEcho[0] = c;
+            this.tty.writeToDevice(this._bufEcho.subarray(0, 1));
+          }
+          this.tty.writeToProcess(this._buf.subarray(0, this._curW));
+          this._curE = 0;
+          this._curR = 0;
+          this._curW = 0;
+          this._curO = 0;
           continue;
         }
 
       }
 
-      // put char into buffer
+      if (lflags & LFlags.ECHO) {
+        if (this._lnext && c < 0x20) {
+          this._lnext = false;
+          this._bufEcho[this._curE++] = '^'.charCodeAt(0);
+          this._bufEcho[this._curE++] = c + 0x40;
+          this._bufOut[this._curO++] = '^'.charCodeAt(0);
+          this._bufOut[this._curO++] = c + 0x40;
+        } else {
+          this._bufEcho[this._curE++] = c;
+          this._bufOut[this._curO++] = c;
+        }
+      }
       this._buf[this._curW++] = c;
-      this._bufEcho[this._curE++] = c;
     }
 
     this._flush();
@@ -456,25 +529,35 @@ class LDisc {
 
   private _erase(c: number): void {
     // erase handling from canon buffer
+    console.log('erase not yet implemented');
   }
 
   private _flush(): void {
     // flush pending actions like pipe writes/updates
+    // FIME: needs handling of writeToProcess for ~ICANON
     const decoder = new Decoder();
-    console.log(['buf acess', decoder.decode(this._buf.subarray(this._curR, this._curW))]);
-    const newAccess = this._curW - this._curR;
-    //this._bufEcho.set(this._buf.subarray(this._curR, this._curW), this._curE);
-    this.tty.writeToDevice(this._bufEcho.subarray(0, this._curE));
-    //console.log(['echo sent', this._curE, decoder.decode(this._bufEcho.subarray(0, this._curE))]);
+    //console.log(['buf acess', decoder.decode(this._buf.subarray(this._curR, this._curW))]);
+    const toSend = this._bufEcho.subarray(0, this._curE);
+    this.tty.writeToDevice(toSend);
     this._curE = 0;
-    //this._curE += this._curW - this._curR;
-    this._curR = this._curW;
-    console.log(['echo', decoder.decode(this._bufEcho)]);
-    console.log(['buf', decoder.decode(this._buf)]);
+    //this._curR = this._curW;
+    //console.log(['echo', decoder.decode(this._bufEcho)]);
+    //console.log(['out', decoder.decode(this._bufOut)]);
+    //console.log(['buf', decoder.decode(this._buf)]);
+    if (!(this.tty.termios.lflags & LFlags.ICANON)) {
+      if (this._curW >= this.tty.termios.cc.VMIN) {
+        const curW = this._curW;
+        this._curR = 0;
+        this._curW = 0;
+        this.tty.writeToProcess(this._buf.subarray(0, curW));
+      }
+    }
   }
 }
 
-
+/**
+ * Early Pty stub, which tries to mimick node-pty interface.
+ */
 export class Pty {
   private _tty: Tty;
   private _p: Process;
@@ -504,10 +587,34 @@ export class Pty {
   }
 }
 
+/**
+ * Helper clib functions regarding ttys.
+ */
+export function isatty(channel: ITtyReader | IPipeReader | ITtyWriter | IPipeWriter): boolean {
+  return typeof typeof (channel as any)._tty !== undefined;
+}
 
-//const tty = new Tty(TERMIOS_COOKED);
-//tty.writeD('hello\r\x03öäü');
-//const pty = new Pty(FakeShell, [], {});
+export function tcgetattr(channel: ITtyReader | IPipeReader | ITtyWriter | IPipeWriter): ITermios {
+  if (!isatty(channel)) {
+    throw new Error('channel is not a tty');
+  }
+  const tty: Tty = (channel as any)._tty;
+  return {
+    ...tty.termios,
+    cc: {...tty.termios.cc}
+  };
+}
 
-//pty.write('HELLO\r\x03ttt');
-//setTimeout(() => {}, 3000);
+export function tcsetattr(
+  channel: ITtyReader | IPipeReader | ITtyWriter | IPipeWriter,
+  termios: ITermios,
+  when: When = When.TCSADRAIN): boolean
+{
+  if (!isatty(channel)) {
+    throw new Error('channel is not a tty');
+  }
+  const tty: Tty = (channel as any)._tty;
+  // TODO: needs a setter on Tty to correctly deal with when clause
+  tty.termios = {...termios, cc: {...termios.cc}};
+  return true;
+}
