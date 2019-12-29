@@ -216,7 +216,7 @@ class Tty implements IPipe {
     if (this.termios.oflags & OFlags.OPOST) {
       if (this.termios.oflags & OFlags.ONLCR) decoded = decoded.replace(/\n/g, '\r\n');
     }
-    console.log('device reads', [decoded]);
+    // console.log('device reads', [decoded]);
     for (let i = 0; i < this._onDataHandlers.length; ++i) {
       this._onDataHandlers[i](decoded);
     }
@@ -396,7 +396,7 @@ class LDisc {
 
   public writeP(data: Uint8Array): void {
     const decoder = new Decoder();
-    console.log('from process', [decoder.decode(data)]);
+    // console.log('from process', [decoder.decode(data)]);
     this._bufEcho.set(data, this._curE);
     this._curE = data.length;
     this._flush();
@@ -535,7 +535,7 @@ class LDisc {
   private _flush(): void {
     // flush pending actions like pipe writes/updates
     // FIME: needs handling of writeToProcess for ~ICANON
-    const decoder = new Decoder();
+    //const decoder = new Decoder();
     //console.log(['buf acess', decoder.decode(this._buf.subarray(this._curR, this._curW))]);
     const toSend = this._bufEcho.subarray(0, this._curE);
     this.tty.writeToDevice(toSend);
@@ -561,17 +561,16 @@ class LDisc {
 export class Pty {
   private _tty: Tty;
   private _p: Process;
-  constructor(command: ProcessMain, argv: string[], opts: any) {
+  constructor(command: ProcessMain, argv: string[], private _opts: any) {
     const t = Object.assign({}, TERMIOS_COOKED);
     t.iflags |= IFlags.IUCLC;
     t.lflags |= LFlags.IEXTEN;
     this._tty = new Tty(t);
     this._p = new Process(command, this._tty, this._tty, this._tty);
-    //p.run([], {});
   }
   public onData(h: (data: string) => void): void {
     this._tty.onDataD(h);
-    this._p.run([], {});
+    this._p.run([], this._opts.env);
   }
   public write(data: string): boolean {
     return this._tty.writeFromDevice(data);
@@ -591,7 +590,7 @@ export class Pty {
  * Helper clib functions regarding ttys.
  */
 export function isatty(channel: ITtyReader | IPipeReader | ITtyWriter | IPipeWriter): boolean {
-  return typeof typeof (channel as any)._tty !== undefined;
+  return (channel as any)._tty !== undefined;
 }
 
 export function tcgetattr(channel: ITtyReader | IPipeReader | ITtyWriter | IPipeWriter): ITermios {

@@ -1,8 +1,8 @@
 import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
-import { Pipe } from './Pipe';
+import { Pipe, IPipe } from './Pipe';
 import { tcsetattr, isatty } from './Tty';
-import { TERMIOS_RAW, TERMIOS_COOKED, ITermios, LFlags } from './Termios';
+import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
 
 /**
  * Simple line based shell REPL.
@@ -13,99 +13,121 @@ export const FakeShell: ProcessMain = (argv, process) => {
     argv: string[];
     error: string;
   }
+  let currentReadHandler: IDisposable;
+  let lastExitCode = 0;   // TODO: provide $? var
   function showPrompt(): void {
     process.stdout.write('FakeShell> ');
   }
-  function parseCommand(data: string): ICmd {
-    const result: ICmd = {cmd: '', argv: [], error: ''};
+  function parseCommand(data: string): ICmd[] {
+    const result: ICmd[] = [{cmd: '', argv: [], error: ''}];
+    let cmdPos = 0;
     data = data.trim();
     if (!data) return result;
     if (!~data.indexOf(' ')) {
-      result.cmd = data;
+      result[cmdPos].cmd = data;
       return result;
     }
-    result.cmd = data.slice(0, data.indexOf(' '));
+    result[cmdPos].cmd = data.slice(0, data.indexOf(' '));
     data = data.slice(data.indexOf(' ') + 1).trim();
     if (!~data.indexOf('"')) {
-      result.argv = data.split(/\s+/);
-      return result;
+      if (!~data.indexOf('|')) {
+        result[cmdPos].argv = data.split(/\s+/);
+        return result;
+      }
     }
     const parts = data.split('"');
     if (parts.length % 2 === 0) {
-      result.error = 'unterminated argument';
+      result[cmdPos].error = 'unterminated argument';
       return result;
     }
+    let isCmd = false;
     for (let i = 0; i < parts.length; ++i) {
-      const part = parts[i].trim();
+      let part = parts[i].trim();
       if (!part) continue;
       if (i % 2) {
-        result.argv.push(part);
+        result[cmdPos].argv.push(part);
       } else {
-        part.split(/\s+/).forEach(el => result.argv.push(el));
+        part = part.replace(/[|]/g, ' | ');
+        const sub = part.split(/\s+/);
+        for (let i = 0; i < sub.length; ++i) {
+          if (sub[i] === '|') {
+            result.push({cmd: '', argv: [], error: ''});
+            cmdPos++;
+            isCmd = true;
+            continue;
+          }
+          if (isCmd) {
+            result[cmdPos].cmd = sub[i];
+            isCmd = false;
+          } else {
+            result[cmdPos].argv.push(sub[i]);
+          }
+        }
       }
     }
     return result;
   }
-
-  let currentReadHandler: IDisposable;
+  function evalCommand(cmd: ICmd[]): boolean {
+    // basic error checks
+    if (cmd[0].error) {
+      process.stdout.write(`[Error]: ${cmd[0].error}\n`);
+      return false;
+    }
+    if (!cmd[0].cmd) {
+      return false;
+    }
+    // check if programs are available
+    const progs = cmd.map(el => el.cmd);
+    for (const prog of progs) {
+      if (!(prog in KNOWN_COMMANDS)) {
+        process.stdout.write(`unknown command: "${prog}"\nType \`commands\` to see a list of supported commands.\n`);
+        return false;
+      }
+    }
+    return true;
+  }
+  function runCommand(cmd: ICmd[]): void {
+    // create pipes
+    const ttyIn = (process.stdin as any)._tty;
+    const ttyOut = (process.stdout as any)._tty;
+    const pipes: IPipe[] = [];
+    for (let i = 0; i < cmd.length - 1; ++i) {
+      pipes.push(new Pipe());
+    }
+    // create processes
+    const processes: Process[] = [];
+    for (let i = 0; i < cmd.length; ++i) {
+      if (i === 0) {
+        processes.push(new Process(KNOWN_COMMANDS[cmd[0].cmd], ttyIn, pipes[0] || ttyOut, pipes[0] || ttyOut));
+      } else if (i === cmd.length - 1) {
+        processes.push(new Process(KNOWN_COMMANDS[cmd[cmd.length - 1].cmd], pipes[pipes.length - 1] || ttyIn, ttyOut, ttyOut));
+      } else {
+        processes.push(new Process(KNOWN_COMMANDS[cmd[i].cmd], pipes[i - 1], pipes[i], pipes[i]));
+      }
+    }
+    // detach shell from tty
+    currentReadHandler?.dispose();
+    // reattach after last process is gone
+    processes[processes.length - 1].afterExit(() => {
+      currentReadHandler = process.stdin.onData(readHandler);
+      showPrompt();
+    });
+    // grab exit code from last process
+    processes[processes.length - 1].onExit(statusCode => { lastExitCode = statusCode; });
+    // run processes
+    for (let i = 0; i < processes.length; ++i) {
+      processes[i].run(cmd[i].argv, {...process.env, SHELL: 'FakeShell'});
+    }
+  }
 
   // primitive REPL
   const readHandler = (data: string) => {
     // FIXME: write handling of messed up termios settings (entry for `reset`)
 
-    // pipe example
-    console.log('data', [data]);
-    if (data === 'grr\n') {
-      console.log('piper entered....');
-      const pipe = new Pipe();
-      const p1 = new Process(ECHO, (process.stdin as any)._tty, pipe, pipe);
-      const p2 = new Process(WC, pipe, (process.stdout as any)._tty, (process.stdout as any)._tty);
-      currentReadHandler?.dispose();
-      pipe.onClose(() => p2.exit());
-      setTimeout(() => console.log((pipe as any)._writers), 2000);
-      p2.afterExit(() => {
-        console.log(`EXIT subprogram "echo"`);
-        currentReadHandler = process.stdin.onData(readHandler);
-        showPrompt();
-      });
-      p1.run(['hello world!\nsecond line.'], {});
-      p2.run([], {});
-      return;
-    }
-
-    // eval
+    // parse, eval and run
     const cmd = parseCommand(data);
-    if (cmd.error) {
-      process.stdout.write(`[Error]: ${cmd.error}\n`);
-      showPrompt();
-      return;
-    }
-    if (!cmd.cmd) {
-      showPrompt();
-      return;
-    }
-
-    // run sub process
-    if (cmd.cmd in KNOWN_COMMANDS) {
-      const p = new Process(
-        KNOWN_COMMANDS[cmd.cmd],
-        (process.stdin as any)._tty,
-        (process.stdout as any)._tty,
-        (process.stderr as any)._tty
-      );
-      // disconnect shell from tty
-      currentReadHandler?.dispose();
-      // reconnect shell to tty when done
-      p.afterExit(() => {
-        console.log(`EXIT subprogram "${cmd.cmd}"`);
-        currentReadHandler = process.stdin.onData(readHandler);
-        showPrompt();
-      });
-      p.run(cmd.argv, {});
-    } else {
-      process.stdout.write(`unknown command: "${cmd.cmd}"\nType \`commands\` to see a list of supported commands.\n`);
-      showPrompt();
-    }
+    if (evalCommand(cmd)) runCommand(cmd);
+    else showPrompt();
   }
 
   // startup
@@ -126,14 +148,11 @@ const FUN: ProcessMain = (argv, process) => {
  * Simple echo program.
  */
 const ECHO: ProcessMain = (argv, process) => {
-  function istty(obj: any) {
-    return !!(obj?._tty);
-  }
   process.stdout.write(
     argv.join(' ')
       .replace(/\\n/g, '\n')
       .replace(/\\x([0-9A-Fa-f][0-9A-Fa-f])/g, (m, p1) => String.fromCharCode(parseInt(p1, 16)))
-    + (istty(process.stdout) ? '\n' : '')
+    + '\n'
   );
   process.exit();
 }
@@ -147,22 +166,47 @@ const STTY: ProcessMain = (argv, process) => {
 }
 
 /**
- * Simple wc implementation. (accumulates data)
+ * Simple wc implementation.
  */
 const WC: ProcessMain = (argv, process) => {
-  let input = '';
+  let gChars = 0;
+  let gLines = 0;
+  let gWords = 0;
+  let lastChunk = '';
 
   process.stdin.onData(data => {
-    console.log('seen in wc', [data]);
-    input += data;
+    // exit rule for interactive mode
+    if (data === '') {
+      process.exit();  // FIXME: move to process management, FIXME: does not print summary
+      return;
+    }
+
+    gChars += data.length;
+    data += lastChunk;
+    lastChunk = '';
+    const lines = data.split('\n');
+    gLines += lines.length;
+    for (let i = 0; i < lines.length; ++i) {
+      const words = lines[i].split(/\s+/);
+      gWords += words.filter(Boolean).length;
+      if (i === lines.length - 1) {
+        // fix split last word
+        if (words[words.length - 1]) {
+          gWords--;
+          lastChunk = words[words.length - 1];
+        } else if (lines[i] === '') {
+          gLines--;
+          lastChunk = '\n';
+        }
+      }
+    }
   });
-  (process.stdin as any)._pipe.onClose(() => {
-    console.log('gggggggggggggggggggggggggggggg');
-    const lines = input.split('\n');
-    const words = lines.reduce((prev, cur) => prev + cur.split(/\s+/).filter(Boolean).length, 0);
-    //process.stdout.write(`${lines.length} ${words} ${input.length}\n`); // FIXME to late for stdout here
-    console.log(`\t${lines.length}\t${words}\t${input.length}\n`);
-  });
+
+  if (isatty(process.stdin)) {
+    // handle tty input differently
+  } else {
+    process.onExit(() => process.stdout.write(`\t${gLines}\t${gWords}\t${gChars}\n`));
+  }
 }
 
 /**
@@ -184,7 +228,7 @@ const RAW: ProcessMain = (argv, process) => {
         escaped += data[i];
       }
     }
-    process.stdout.write(`raw read: "${escaped}"\r\n`);
+    process.stdout.write(`byte read: "${escaped}"\r\n`);
   });
   process.stdout.write('Exit with Ctrl-D.\n');
   tcsetattr(process.stdin, TERMIOS_RAW);
@@ -194,6 +238,36 @@ const RESET: ProcessMain = (argv, process) => {
   if (isatty(process.stdout)) {
     tcsetattr(process.stdout, TERMIOS_COOKED);
     process.stdout.write('\x1bc');
+  }
+  process.exit();
+}
+
+const CAT: ProcessMain = (argv, process) => {
+  process.stdin.onData(data => {
+    if (data === '') { // FIXME: move this one level up to process management
+      process.exit();
+      return;
+    }
+    process.stdout.write(data);
+  });
+}
+
+const SLEEP: ProcessMain = (argv, process) => {
+  let seconds;
+  if (argv.length !== 1 || isNaN(seconds = parseFloat(argv[0]))) {
+    process.stderr.write('sleep: illegal operant\n');
+    process.exit(1);
+  }
+  setTimeout(() => process.exit(), seconds * 1000);
+}
+
+const EXPORT: ProcessMain = (argv, process) => {
+  if (argv.length) {
+
+  } else {
+    for (const key of Object.keys(process.env).sort()) {
+      process.stdout.write(`${key}=${process.env[key]}\n`);
+    }
   }
   process.exit();
 }
@@ -213,5 +287,13 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'stty': STTY,
   'raw': RAW,
   'reset': RESET,
-  'commands': COMMANDS
+  'commands': COMMANDS,
+  'wc': WC,
+  'cat': CAT,
+  'sleep': SLEEP,
+  'export': EXPORT
 };
+
+// missing commands: export, man
+// missing shell operators: &&, ||, ;, redirects
+// missing process primitives: cterm, fg, bg

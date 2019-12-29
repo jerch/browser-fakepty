@@ -6,14 +6,15 @@ interface ProcessModule {
   stdin: IPipeReader;
   stdout: IPipeWriter;
   stderr: IPipeWriter;
-  exit(): void;
+  exit(statusCode?: number): void;
   onExit(handler: () => void): IDisposable;
-  environ: {[key: string]: string};
+  env: {[key: string]: string};
 }
 
 export class Process {
-  private _exitHandlers: (() => void)[] = [];
+  private _exitHandlers: ((statusCode: number) => void)[] = [];
   private _cleanupHandlers: (() => void)[] = [];
+  public statusCode = -1;
   public stdin: IPipeReader;
   public stdout: IPipeWriter;
   public stderr: IPipeWriter;
@@ -29,12 +30,12 @@ export class Process {
       stdin: this.stdin,
       stdout: this.stdout,
       stderr: this.stderr,
-      environ,
-      exit: () => this.exit(),
-      onExit: (handler: () => void) => this.onExit(handler)
+      env: {...environ},
+      exit: (statusCode: number = 0) => this.exit(statusCode),
+      onExit: (handler: (statusCode: number) => void) => this.onExit(handler)
     });
   }
-  public onExit(handler: () => void): IDisposable {
+  public onExit(handler: (statusCode: number) => void): IDisposable {
     this._exitHandlers.push(handler);
     return {
       dispose: () => {
@@ -43,18 +44,19 @@ export class Process {
       }
     }
   }
-  public exit(): void {
-    this._exit();
+  public exit(statusCode: number = 0): void {
+    setTimeout(() => this._exit(statusCode), 0);
   }
-  public _exit(): void {
-    let exitHandler: () => void;
+  public _exit(statusCode: number): void {
+    this.statusCode = statusCode;
+    let exitHandler: (statusCode: number) => void;
     while ((exitHandler = this._exitHandlers.shift())) {
-      try { exitHandler(); } catch (e) {}
+      try { exitHandler(statusCode); } catch (e) {}
     }
     this.stdin.close();
     this.stdout.close();
     this.stderr.close();
-    setTimeout(() => this._afterExit(), 50); // run somewhat in the future
+    setTimeout(() => this._afterExit(), 0);
   }
   public afterExit(handler: () => void): IDisposable {
     this._cleanupHandlers.push(handler);

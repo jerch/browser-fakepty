@@ -86,78 +86,46 @@ export interface ITermios {
   cc: CC;
 }
 
+const DEFAULT_CC: CC = Object.freeze({
+  VDISCARD: 15,
+  VEOF: 4,
+  VEOL: 0,
+  VEOL2: 0,
+  VERASE: 127,
+  VINTR: 3,
+  VKILL: 21,
+  VLNEXT: 22,
+  VMIN: 1,
+  VQUIT: 28,
+  VREPRINT: 18,
+  VSTART: 17,
+  VSTOP: 19,
+  VSUSP: 26,
+  VTIME: 0,
+  VWERASE: 23
+});
+
 export const TERMIOS_COOKED: ITermios = Object.freeze({
   iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
   oflags: OFlags.OPOST | OFlags.ONLCR,
   lflags: LFlags.ECHOKE | LFlags.ECHOCTL | LFlags.ECHOK | LFlags.ECHOE | LFlags.ECHO |
           LFlags.ICANON | LFlags.IEXTEN | LFlags.ISIG,
-  cc: {
-    VDISCARD: 15,
-    VEOF: 4,
-    VEOL: 0,
-    VEOL2: 0,
-    VERASE: 127,
-    VINTR: 3,
-    VKILL: 21,
-    VLNEXT: 22,
-    VMIN: 1,
-    VQUIT: 28,
-    VREPRINT: 18,
-    VSTART: 17,
-    VSTOP: 19,
-    VSUSP: 26,
-    VTIME: 0,
-    VWERASE: 23
-  }
+  cc: DEFAULT_CC
 });
 
-export const TERMIOS_CBREAK: ITermios = {
+export const TERMIOS_CBREAK: ITermios = Object.freeze({
   iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
   oflags: OFlags.OPOST | OFlags.ONLCR,
   lflags: LFlags.ECHOKE | LFlags.ECHOCTL | LFlags.ECHOK | LFlags.ECHOE | LFlags.IEXTEN | LFlags.ISIG,
-  cc: {
-    VDISCARD: 15,
-    VEOF: 4,
-    VEOL: 0,
-    VEOL2: 0,
-    VERASE: 127,
-    VINTR: 3,
-    VKILL: 21,
-    VLNEXT: 22,
-    VMIN: 1,
-    VQUIT: 28,
-    VREPRINT: 18,
-    VSTART: 17,
-    VSTOP: 19,
-    VSUSP: 26,
-    VTIME: 0,
-    VWERASE: 23
-  }
-};
+  cc: DEFAULT_CC
+});
 
-export const TERMIOS_RAW: ITermios = {
+export const TERMIOS_RAW: ITermios = Object.freeze({
   iflags: 0,
   oflags: 0,
   lflags: 0,
-  cc: {
-    VDISCARD: 15,
-    VEOF: 4,
-    VEOL: 0,
-    VEOL2: 0,
-    VERASE: 127,
-    VINTR: 3,
-    VKILL: 21,
-    VLNEXT: 22,
-    VMIN: 1,
-    VQUIT: 28,
-    VREPRINT: 18,
-    VSTART: 17,
-    VSTOP: 19,
-    VSUSP: 26,
-    VTIME: 0,
-    VWERASE: 23
-  }
-};
+  cc: DEFAULT_CC
+});
 
 export const enum When {
   TCSANOW,
