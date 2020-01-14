@@ -1,4 +1,5 @@
-import { Pipe, IPipeReader, IPipeWriter, IDisposable, IPipe } from './Pipe';
+import { getLogPipe } from './Pipe';
+import { IPipeReader, IPipeWriter, IDisposable, IPipe } from './Types';
 
 export type ProcessMain = (args: any[], process: ProcessModule) => void;
 

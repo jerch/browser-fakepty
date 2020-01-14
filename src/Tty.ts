@@ -1,8 +1,8 @@
-import { IPipe, IDisposable, IPipeReader, IPipeWriter, PipeReader, Pipe, getLogPipe } from './Pipe';
+import { Pipe } from './Pipe';
 import { ITermios, TERMIOS_COOKED, IFlags, LFlags, OFlags, When } from './Termios';
 import { Encoder, Decoder } from './utf8';
 import { ProcessMain, Process } from './Process';
-import { FakeShell } from './Shell';
+import { IDisposable, IPipeReader, IPipeWriter, IPipe } from './Types';
 
 /**
  * Schema for ttys:
@@ -510,12 +510,16 @@ class LDisc {
       }
 
       if (lflags & LFlags.ECHO) {
-        if (this._lnext && c < 0x20) {
-          this._lnext = false;
+        if (c < 0x20) {
           this._bufEcho[this._curE++] = '^'.charCodeAt(0);
           this._bufEcho[this._curE++] = c + 0x40;
-          this._bufOut[this._curO++] = '^'.charCodeAt(0);
-          this._bufOut[this._curO++] = c + 0x40;
+          if (this._lnext) {
+            this._lnext = false;
+            this._bufOut[this._curO++] = '^'.charCodeAt(0);
+            this._bufOut[this._curO++] = c + 0x40;
+          } else {
+            this._bufOut[this._curO++] = c;
+          }
         } else {
           this._bufEcho[this._curE++] = c;
           this._bufOut[this._curO++] = c;
@@ -529,7 +533,46 @@ class LDisc {
 
   private _erase(c: number): void {
     // erase handling from canon buffer
-    console.log('erase not yet implemented');
+    // TODO: respect utf8 multibyte, respect self generated multibytes (^[..., ^X)
+    const cc = this.tty.termios.cc;
+    switch (c) {
+      case cc.VERASE:
+        if (this._curW) {
+          this._bufEcho[this._curE++] = 8;
+          this._bufEcho[this._curE++] = 32;
+          this._bufEcho[this._curE++] = 8;
+          this._curW--;
+          this._curO--;
+        }
+        break;
+      case cc.VWERASE:
+        // strip any whitespace from right
+        while (this._curW && isspace(this._buf[this._curW - 1])) {
+          this._bufEcho[this._curE++] = 8;
+          this._bufEcho[this._curE++] = 32;
+          this._bufEcho[this._curE++] = 8;
+          this._curW--;
+          this._curO--;
+        }
+        // revert cursor before word
+        while (this._curW && !isspace(this._buf[this._curW - 1])) {
+          this._bufEcho[this._curE++] = 8;
+          this._bufEcho[this._curE++] = 32;
+          this._bufEcho[this._curE++] = 8;
+          this._curW--;
+          this._curO--;
+        }
+        break;
+      case cc.VKILL:
+        while (this._curW) {
+          this._bufEcho[this._curE++] = 8;
+          this._bufEcho[this._curE++] = 32;
+          this._bufEcho[this._curE++] = 8;
+          this._curW--;
+          this._curO--;
+        }
+        break;
+    }
   }
 
   private _flush(): void {
@@ -563,8 +606,8 @@ export class Pty {
   private _p: Process;
   constructor(command: ProcessMain, argv: string[], private _opts: any) {
     const t = Object.assign({}, TERMIOS_COOKED);
-    t.iflags |= IFlags.IUCLC;
-    t.lflags |= LFlags.IEXTEN;
+    //t.iflags |= IFlags.IUCLC;
+    //t.lflags |= LFlags.IEXTEN;
     this._tty = new Tty(t);
     this._p = new Process(command, this._tty, this._tty, this._tty);
   }
@@ -616,4 +659,10 @@ export function tcsetattr(
   // TODO: needs a setter on Tty to correctly deal with when clause
   tty.termios = {...termios, cc: {...termios.cc}};
   return true;
+}
+
+// TODO: make this configurable (locale dependent?)
+const WHITESPACE = [9, 10, 11, 12, 13, 32];
+function isspace(c: number): number {
+  return ~WHITESPACE.indexOf(c);
 }

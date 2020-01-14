@@ -102,7 +102,7 @@ const DEFAULT_CC: CC = Object.freeze({
   VSTOP: 19,
   VSUSP: 26,
   VTIME: 0,
-  VWERASE: 23
+  VWERASE: 24 // temp. set to Ctrl-X, orig. Ctrl-W: 23
 });
 
 export const TERMIOS_COOKED: ITermios = Object.freeze({

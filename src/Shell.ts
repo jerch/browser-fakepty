@@ -1,8 +1,9 @@
 import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
-import { Pipe, IPipe } from './Pipe';
+import { Pipe } from './Pipe';
 import { tcsetattr, isatty } from './Tty';
 import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
+import { IPipe } from './Types';
 
 /**
  * Simple line based shell REPL.

@@ -14,6 +14,7 @@ This library tries to mimick parts of POSIX's tty interface to be used with xter
 - workaround for blocking reads
 - define & cleanup interfaces
 - tests
+- maybe integrate memfs as example fs impl
 
 ### State:
 This is in an early alpha state, thus dont expect anything being usable or stable yet.

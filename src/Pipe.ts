@@ -1,29 +1,5 @@
-export interface IPipe {
-  close(): void;
-  onClose(handler: () => void): IDisposable;
-  getReader(): IPipeReader;
-  getWriter(): IPipeWriter;
-  pipeTo(pipes: IPipe[]): void;
-  onDrain(handler: () => void): IDisposable;
-  writable: boolean;
-}
+import { IPipeWriter, IPipeReader, IDisposable, IPipe } from './Types';
 
-export interface IPipeReader {
-  close(): void;
-  onData(handler: (data: any) => void): IDisposable;
-  pause(): void;
-  resume(): void;
-  handleChunk(data: any, callback: (success: boolean) => void): void;
-}
-
-export interface IPipeWriter {
-  close(): void;
-  write(data: any): boolean;
-}
-
-export interface IDisposable {
-  dispose(): void;
-}
 
 
 const DISCARD_LIMIT = 100;
@@ -97,7 +73,6 @@ export class PipeReader implements IPipeReader {
         this._chunk = data;
         this._cb = callback;
       } else {
-        //this._handlers.slice().forEach(h => h(data));
         const handlers = this._handlers.slice();
         for (let i = 0; i < handlers.length; ++i) {
           handlers[i](data);
@@ -232,9 +207,8 @@ export class Pipe implements IPipe {
         const handlers = this._drainHandlers.slice();
         for (let i = 0; i < handlers.length; ++i) {
           // retest writable in case a handler already filled up everything again
-          if (this.writable) {
-            handlers[i]();
-          }
+          if (!this.writable) break;
+          handlers[i]();
         }
       }
     }
