@@ -1,8 +1,8 @@
-import { Pipe } from './Pipe';
+import { Pipe, PipeReader } from './Pipe';
 import { ITermios, TERMIOS_COOKED, IFlags, LFlags, OFlags, When } from './Termios';
 import { Encoder, Decoder } from './utf8';
 import { ProcessMain, Process } from './Process';
-import { IDisposable, IPipeReader, IPipeWriter, IPipe } from './Types';
+import { IDisposable, IPipeReader, IPipeWriter, IPipe, ILineDiscipline } from './Types';
 
 /**
  * Schema for ttys:
@@ -23,6 +23,12 @@ interface ITtyReader extends IPipeReader {
 
 interface ITtyWriter extends IPipeWriter {
   write(data: string): boolean;
+}
+
+enum TtySignal {
+  SIGINT = 2,
+  SIGQUIT = 3,
+  SIGTSTP = 20
 }
 
 class TtyWriter implements ITtyWriter {
@@ -119,20 +125,13 @@ class Tty implements IPipe {
   private _buf: string = '';
   public closed = false;
   public writable = true;
-  private _pending = false;
-  private _ldisc: LDisc;
-  private _encoder = new Encoder();
-  private _decoder = new Decoder();
 
   // master stuff
   private _onDataHandlers: ((data: string) => void)[] = [];
   public masterWritable = true;
-  private _lineBuffer: string = '';
   public paused = false;
 
-  constructor(public termios: ITermios) {
-    this._ldisc = new LDisc(this);
-  }
+  constructor(public newLDisc: ILineDiscipline) {}
 
   private _cleanup(): void {
     this._writers.length = 0;
@@ -202,81 +201,13 @@ class Tty implements IPipe {
     }
   }
 
-  /**
-   * Master side data handling.
-   */
-  private _localProcessing(): void {
-    // LOCAL processing
-
-  }
-
-  public writeToDevice(data: Uint8Array): void {
-    let decoded = this._decoder.decode(data);
-    // late post processing
-    if (this.termios.oflags & OFlags.OPOST) {
-      if (this.termios.oflags & OFlags.ONLCR) decoded = decoded.replace(/\n/g, '\r\n');
-    }
-    // console.log('device reads', [decoded]);
-    for (let i = 0; i < this._onDataHandlers.length; ++i) {
-      this._onDataHandlers[i](decoded);
-    }
-  }
-
-  public writeToProcess(data: Uint8Array): void {
-    const decoded = this._decoder.decode(data);
+  public writeToProcess(data: string | null): void {
     const handlers = this._readers.slice();
     for (let i = 0; i < handlers.length; ++i) {
-      handlers[i].handleChunk(decoded, success => {});
+      handlers[i].handleChunk(data, success => {});
     }
   }
 
-  public writeFromDevice(data: string): boolean {
-    // move to ldisc
-    const iflags = this.termios.iflags;
-    const lflags = this.termios.lflags;
-    if (iflags & IFlags.IUCLC && lflags & LFlags.IEXTEN) data = data.toLocaleLowerCase();
-    this._ldisc.input(this._encoder.encode(data));
-
-    return false;
-
-    if (this.closed || this._lineBuffer.length > DISCARD_LIMIT) {
-      this.masterWritable = false;
-      throw new Error('discarding write data');
-    }
-
-    // INPUT processing
-    //const iflags = this.termios.iflags;
-
-    if (iflags & IFlags.IUCLC) data = data.toLowerCase();
-    for (let i = 0; i < data.length; ++i) {
-      let c = data[i];
-      switch (c) {
-        case '\n': if (iflags & IFlags.INLCR) c = '\r'; break;
-        case '\r': if (iflags & IFlags.IGNCR) c = ''; else if (iflags & IFlags.ICRNL) c = '\n'; break;
-
-      }
-    }
-
-    //if (iflags & IFlags.ISTRIP) { /** TODO */ }
-    if (iflags & IFlags.INLCR) data = data.replace(/\n/g, '\r');
-    if (iflags & IFlags.IGNCR) data = data.replace(/\r/g, '');
-    if (iflags & IFlags.ICRNL) data = data.replace(/\r/g, '\n');
-    if (iflags & IFlags.IUCLC) data = data.toLowerCase();
-    //if (iflags & IFlags.IXON) { /** TODO */ }
-    //if (iflags & IFlags.IXANY) { /** TODO */ }
-    //if (iflags & IFlags.IXOFF) { /** TODO */ }
-    //if (iflags & IFlags.IMAXBEL) { /** TODO */ }
-    //if (iflags & IFlags.IUTF8) { /** always operating in Unicode */ }
-
-    this._lineBuffer += data;
-    this._localProcessing();
-
-    // update writable flag
-    if (this.masterWritable) {
-      this.masterWritable = this._lineBuffer.length < MAX_LIMIT;
-    }
-    return this.masterWritable;
-  }
   public onDataD(handler: (data: string) => void): IDisposable {
     const handlers = this._onDataHandlers;
     handlers.push(handler);
@@ -295,31 +226,14 @@ class Tty implements IPipe {
     // XON/XOFF
     console.log('tty should resume');
   }
-  private _handleMasterOutput(data: string, callback: (success: boolean) => void) {
-    // line discipline OUTPUT
-  }
-
-  /**
-   * Slave side data handling.
-   */
-  private _handle(): void {
-    // line discipline handling
-  }
 
   public insertData(data: string): boolean {
     if (this.closed || this._buf.length > DISCARD_LIMIT) {
       this.writable = false;
       throw new Error('discarding write data');
     }
-    this._ldisc.writeP(this._encoder.encode(data));
-    return;
-
-    // place data and schedule processing
-    this._buf += data;
-    if (!this._pending) {
-      this._pending = true;
-      setTimeout(() => this._handle(), 0);
-    }
+    this.newLDisc.recvP(data);
+    return; // TODO
 
     // update writable flag
     if (this.writable) {
@@ -371,66 +285,127 @@ class Tty implements IPipe {
   }
 }
 
-enum TtySignal {
-  SIGINT = 2,
-  SIGQUIT = 3,
-  SIGTSTP = 20
-}
 
 /**
  * Inspired from linux n_tty
- * @see https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c#L1359
+ * @see https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c
  */
-class LDisc {
+class TermiosDiscipline implements ILineDiscipline {
+  private _lReceiver: (data: string) => void;
+  private _pReceiver: (data: string) => void;
+  private _encoder = new Encoder();
+  private _lDecoder = new Decoder();
+  private _pDecoder = new Decoder();
+  constructor(public settings: ITermios) {}
+
+  /**
+   * Register a line receiver. Any data from `_sendL` will be sent to that receiver.
+   * This is the entry point for `Pty.onData` handler.
+   * Only a single callback is currently supported.
+   */
+  public registerLineReceiver(handler: (data: string) => void): void {
+    this._lReceiver = handler;
+  }
+
+  /**
+   * Register a process receiver. Any data from `_sendP` will be sent to that receiver.
+   * This is the entry point for `Tty.writeToProcess`.
+   * Only a single callback is currently supported.
+   */
+  public registerProcessReceiver(handler: (data: string) => void): void {
+    this._pReceiver = handler;
+  }
+
+  /**
+   * Send data to the line.
+   * Does line oflag processing and UTF8 to string conversion.
+   */
+  private _sendL(data: Uint8Array): void {
+    let decoded = this._lDecoder.decode(data, {stream: true});
+    if (this.settings.oflags & OFlags.OPOST) {
+      if (this.settings.oflags & OFlags.ONLCR) decoded = decoded.replace(/\n/g, '\r\n');
+    }
+    this._lReceiver?.(decoded);
+  }
+
+  /**
+   * Send data to processes.
+   * Does UTF8 to string conversion.
+   */
+  private _sendP(data: Uint8Array | null): void {
+    if (data !== null) {
+      this._pReceiver?.(this._pDecoder.decode(data, {stream: true}));
+    } else {
+      this._pDecoder.decode(new Uint8Array(0), {stream: false});
+      this._pReceiver?.(null);
+    }
+  }
+
+  /**
+   * Receive data from the line.
+   * This is the entry point for `Pty.write`.
+   * Does string to UTF8 conversion and line iflag processing.
+   */
+  public recvL(data: string): boolean {
+    const iflags = this.settings.iflags;
+    const lflags = this.settings.lflags;
+    if (iflags & IFlags.IUCLC && lflags & LFlags.IEXTEN) data = data.toLocaleLowerCase();
+    this._recv(this._encoder.encode(data));
+    return true;  // TODO: buffer watermark
+  }
+
+  /**
+   * Receive data from processes.
+   * This is the entry point for TTY writers.
+   * Writes data to echo buffer and flushes output.
+   */
+  public recvP(data: string): void {
+    const bytes = this._encoder.encode(data);
+    this._bufEcho.set(bytes, this._curE);
+    this._curE = bytes.length;
+    this._flush();
+  }
+
   private _buf = new Uint8Array(MAX_LIMIT);
   private _bufEcho = new Uint8Array(MAX_LIMIT);
   private _bufOut = new Uint8Array(MAX_LIMIT);
   private _curW = 0;
-  private _curR = 0;
   private _curE = 0;
   private _curO = 0;
   private _lnext = false;
-  constructor(public tty: Tty) {}
 
-  private output(): void {}
-
-  public writeP(data: Uint8Array): void {
-    const decoder = new Decoder();
-    // console.log('from process', [decoder.decode(data)]);
-    this._bufEcho.set(data, this._curE);
-    this._curE = data.length;
-    this._flush();
-  }
-
-  // input from line
-  public input(data: Uint8Array): void {
+  /**
+   * termios flag handling.
+   * This is called from `recvL` and does most iflag and lflag handling.
+   */
+  public _recv(data: Uint8Array): void {
     if (!data.length) return;
 
-    const iflags = this.tty.termios.iflags;
-    const lflags = this.tty.termios.lflags;
-    const cc = this.tty.termios.cc;
+    const iflags = this.settings.iflags;
+    const lflags = this.settings.lflags;
+    const cc = this.settings.cc;
     for (let i = 0; i < data.length; ++i) {
       let c = data[i];
       if (iflags & IFlags.ISTRIP) c &= 0xFF;
       if (iflags & IFlags.IXON) {
         if (c === cc.VSTOP && !this._lnext) {
-          this.tty.pause();
+          this.pause();
           continue;
         }
         if (c === cc.VSTART && !this._lnext) {
-          this.tty.resume();
+          this.resume();
           continue;
         }
-        if (this.tty.paused && iflags & IFlags.IXANY && c !== cc.VINTR && c !== cc.VQUIT && c !== cc.VSUSP) {
-          this.tty.resume();
+        if (this.paused && iflags & IFlags.IXANY && c !== cc.VINTR && c !== cc.VQUIT && c !== cc.VSUSP) {
+          this.resume();
           // continue;      // FIXME: need to consume char here?
         }
       }
       if (lflags & LFlags.ISIG && !this._lnext) {
         // FIXME: flush needed here?
-        if (c === cc.VINTR) { this._flush(); this.tty.signal(TtySignal.SIGINT); continue; }
-        if (c === cc.VQUIT) { this._flush(); this.tty.signal(TtySignal.SIGQUIT); continue; }
-        if (c === cc.VSUSP) { this._flush(); this.tty.signal(TtySignal.SIGTSTP); continue; }
+        if (c === cc.VINTR) { this._flush(); this.signal(TtySignal.SIGINT); continue; }
+        if (c === cc.VQUIT) { this._flush(); this.signal(TtySignal.SIGQUIT); continue; }
+        if (c === cc.VSUSP) { this._flush(); this.signal(TtySignal.SIGTSTP); continue; }
       }
       if (c === 13 && !this._lnext) {
         if (iflags & IFlags.IGNCR) continue;
@@ -460,7 +435,7 @@ class LDisc {
           this._bufEcho[this._curE++] = '\n'.charCodeAt(0);
           this._bufEcho.set(this._bufOut.subarray(0, this._curO), this._curE);
           this._curE += this._curO;
-          this.tty.writeToDevice(this._bufEcho.subarray(0, this._curE));
+          this._sendL(this._bufEcho.subarray(0, this._curE));
           this._curE = 0;
           continue;
         }
@@ -469,23 +444,24 @@ class LDisc {
           if (lflags & LFlags.ECHO || lflags & LFlags.ECHONL) {
             this._buf[this._curW++] = c;
             this._bufEcho[0] = c;
-            this.tty.writeToDevice(this._bufEcho.subarray(0, 1));
+            this._sendL(this._bufEcho.subarray(0, 1));
           }
-          this.tty.writeToProcess(this._buf.subarray(0, this._curW));
+          this._sendP(this._buf.subarray(0, this._curW));
           this._curE = 0;
-          this._curR = 0;
           this._curW = 0;
           this._curO = 0;
           continue;
         }
 
         if (c === cc.VEOF && !this._lnext) {
-          this.tty.writeToProcess(this._buf.subarray(0, this._curW));
+          if (this._curW) {
+            this._sendP(this._buf.subarray(0, this._curW));
+          }
+          this._sendP(null);
           console.log('should send EOF mark'); // TODO: implement end event on pipe readers
           // TODO: always split upcoming data into new onData event, the old consumer has to be gone by that
           // this needs several tweaks on the pipe interfaces
           this._curE = 0;
-          this._curR = 0;
           this._curW = 0;
           this._curO = 0;
           continue;
@@ -497,11 +473,10 @@ class LDisc {
           if (lflags & LFlags.ECHO) {
             this._buf[this._curW++] = c;
             this._bufEcho[0] = c;
-            this.tty.writeToDevice(this._bufEcho.subarray(0, 1));
+            this._sendL(this._bufEcho.subarray(0, 1));
           }
-          this.tty.writeToProcess(this._buf.subarray(0, this._curW));
+          this._sendP(this._buf.subarray(0, this._curW));
           this._curE = 0;
-          this._curR = 0;
           this._curW = 0;
           this._curO = 0;
           continue;
@@ -531,10 +506,30 @@ class LDisc {
     this._flush();
   }
 
+  /**
+   * Flush output buffers.
+   */
+  private _flush(): void {
+    if (this._curE) {
+      this._sendL(this._bufEcho.subarray(0, this._curE));
+    }
+    this._curE = 0;
+    if (!(this.settings.lflags & LFlags.ICANON)) {
+      if (this._curW >= this.settings.cc.VMIN) {
+        const curW = this._curW;
+        this._curW = 0;
+        this._sendP(this._buf.subarray(0, curW));
+      }
+    }
+  }
+
+  /**
+   * Erase handling for ICANON.
+   */
   private _erase(c: number): void {
     // erase handling from canon buffer
     // TODO: respect utf8 multibyte, respect self generated multibytes (^[..., ^X)
-    const cc = this.tty.termios.cc;
+    const cc = this.settings.cc;
     switch (c) {
       case cc.VERASE:
         if (this._curW) {
@@ -575,48 +570,55 @@ class LDisc {
     }
   }
 
-  private _flush(): void {
-    // flush pending actions like pipe writes/updates
-    // FIME: needs handling of writeToProcess for ~ICANON
-    //const decoder = new Decoder();
-    //console.log(['buf acess', decoder.decode(this._buf.subarray(this._curR, this._curW))]);
-    const toSend = this._bufEcho.subarray(0, this._curE);
-    this.tty.writeToDevice(toSend);
-    this._curE = 0;
-    //this._curR = this._curW;
-    //console.log(['echo', decoder.decode(this._bufEcho)]);
-    //console.log(['out', decoder.decode(this._bufOut)]);
-    //console.log(['buf', decoder.decode(this._buf)]);
-    if (!(this.tty.termios.lflags & LFlags.ICANON)) {
-      if (this._curW >= this.tty.termios.cc.VMIN) {
-        const curW = this._curW;
-        this._curR = 0;
-        this._curW = 0;
-        this.tty.writeToProcess(this._buf.subarray(0, curW));
-      }
-    }
+  // interface those from tty
+  public signal(sig: TtySignal): void {
+    console.log('signal to send:', TtySignal[sig]);
   }
+  public resume(): void {
+    console.log('resume: not implemented');
+  }
+  public pause(): void {
+    console.log('pause: not implemented');
+  }
+  public paused = false;
 }
+
 
 /**
  * Early Pty stub, which tries to mimick node-pty interface.
+ * TODO:
+ * - resize handling
+ * - onData multiplexer
+ * - close event
+ * - kill handling
  */
 export class Pty {
   private _tty: Tty;
   private _p: Process;
-  constructor(command: ProcessMain, argv: string[], private _opts: any) {
-    const t = Object.assign({}, TERMIOS_COOKED);
-    //t.iflags |= IFlags.IUCLC;
-    //t.lflags |= LFlags.IEXTEN;
-    this._tty = new Tty(t);
+  private _ldisc: TermiosDiscipline;
+  constructor(command: ProcessMain, private _argv: string[], private _opts: any) {
+    const termios = {...TERMIOS_COOKED, cc: {...TERMIOS_COOKED.cc}};
+
+    this._ldisc = new TermiosDiscipline(termios);
+
+    this._tty = new Tty(this._ldisc);
+    this._ldisc.registerProcessReceiver(this._tty.writeToProcess.bind(this._tty));
     this._p = new Process(command, this._tty, this._tty, this._tty);
+    this._p.afterExit(() => this.close());
+  }
+  public close(): void {
+    this._p = null;
+    this._tty.close();
+    this._tty = null;
+    this._ldisc = null;
   }
   public onData(h: (data: string) => void): void {
-    this._tty.onDataD(h);
-    this._p.run([], this._opts.env);
+    this._ldisc.registerLineReceiver(h);
+    // TODO: multiplexer for onData
+    this._p.run(this._argv, this._opts.env);
   }
   public write(data: string): boolean {
-    return this._tty.writeFromDevice(data);
+    return this._ldisc?.recvL(data);
   }
   public pause(): void {
     this._tty.pause();
@@ -627,7 +629,11 @@ export class Pty {
   public kill(sig: string | number): void {
     // do something with process
   }
+  public resize(cols: number, rows: number, xpixels: number = 0, ypixels: number = 0): void {
+    // TODO
+  }
 }
+
 
 /**
  * Helper clib functions regarding ttys.
@@ -640,11 +646,14 @@ export function tcgetattr(channel: ITtyReader | IPipeReader | ITtyWriter | IPipe
   if (!isatty(channel)) {
     throw new Error('channel is not a tty');
   }
-  const tty: Tty = (channel as any)._tty;
-  return {
-    ...tty.termios,
-    cc: {...tty.termios.cc}
-  };
+  const tty: Tty = (channel as any)._tty as Tty;
+  if (tty.newLDisc instanceof TermiosDiscipline) {
+    return {
+      ...tty.newLDisc.settings,
+      cc: {...tty.newLDisc.settings.cc}
+    };
+  }
+  throw new Error('unsupported line discipline');
 }
 
 export function tcsetattr(
@@ -657,7 +666,11 @@ export function tcsetattr(
   }
   const tty: Tty = (channel as any)._tty;
   // TODO: needs a setter on Tty to correctly deal with when clause
-  tty.termios = {...termios, cc: {...termios.cc}};
+  if (tty.newLDisc instanceof TermiosDiscipline) {
+    tty.newLDisc.settings = {...termios, cc: {...termios.cc}};
+  } else {
+    throw new Error('unsupported line discipline');
+  }
   return true;
 }
 

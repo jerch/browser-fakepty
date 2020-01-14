@@ -123,6 +123,11 @@ export const FakeShell: ProcessMain = (argv, process) => {
 
   // primitive REPL
   const readHandler = (data: string) => {
+    if (data === null) {
+      // shell exit
+      process.exit();
+      return;
+    }
     // FIXME: write handling of messed up termios settings (entry for `reset`)
 
     // parse, eval and run
@@ -130,6 +135,8 @@ export const FakeShell: ProcessMain = (argv, process) => {
     if (evalCommand(cmd)) runCommand(cmd);
     else showPrompt();
   }
+
+  process.onExit(() => process.stdout.write('\n[Exiting FakeShell]\n'));
 
   // startup
   currentReadHandler = process.stdin.onData(readHandler);
@@ -175,9 +182,11 @@ const WC: ProcessMain = (argv, process) => {
   let gWords = 0;
   let lastChunk = '';
 
+  process.onExit(() => process.stdout.write(`\t${gLines}\t${gWords}\t${gChars}\n`));
+
   process.stdin.onData(data => {
     // exit rule for interactive mode
-    if (data === '') {
+    if (data === null) {
       process.exit();  // FIXME: move to process management, FIXME: does not print summary
       return;
     }
@@ -202,12 +211,6 @@ const WC: ProcessMain = (argv, process) => {
       }
     }
   });
-
-  if (isatty(process.stdin)) {
-    // handle tty input differently
-  } else {
-    process.onExit(() => process.stdout.write(`\t${gLines}\t${gWords}\t${gChars}\n`));
-  }
 }
 
 /**
@@ -245,7 +248,7 @@ const RESET: ProcessMain = (argv, process) => {
 
 const CAT: ProcessMain = (argv, process) => {
   process.stdin.onData(data => {
-    if (data === '') { // FIXME: move this one level up to process management
+    if (data === null) { // FIXME: move this one level up to process management
       process.exit();
       return;
     }

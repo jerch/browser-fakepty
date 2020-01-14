@@ -34,3 +34,15 @@ export interface IEventEmitter<T, U = void> {
   fire(arg1: T, arg2: U): void;
   dispose(): void;
 }
+
+
+export interface ILineDiscipline {
+  // settings
+  settings: {[key: string]: any};
+  // line interface
+  recvL(data: string): boolean; // line incomming
+  registerLineReceiver(handler: (data: string) => void): void; // line outgoing
+  // pipe interface
+  recvP(data: string): void; // process incomming
+  registerProcessReceiver(handler: (data: string) => void): void; // pipe outgoing
+}
