@@ -96,6 +96,7 @@ class TtyReader implements ITtyReader {
         this._chunk = data;
         this._cb = callback;
       } else {
+        //this._handlers.forEach(h => h(data));
         //this._handlers.slice().forEach(h => h(data));
         const handlers = this._handlers.slice();
         for (let i = 0; i < handlers.length; ++i) {
@@ -456,11 +457,10 @@ class TermiosDiscipline implements ILineDiscipline {
         if (c === cc.VEOF && !this._lnext) {
           if (this._curW) {
             this._sendP(this._buf.subarray(0, this._curW));
+          } else {
+            // indicate EOF, currently handled in the shell TODO: needs better fg/bg abstraction
+            this._sendP(null);
           }
-          this._sendP(null);
-          console.log('should send EOF mark'); // TODO: implement end event on pipe readers
-          // TODO: always split upcoming data into new onData event, the old consumer has to be gone by that
-          // this needs several tweaks on the pipe interfaces
           this._curE = 0;
           this._curW = 0;
           this._curO = 0;

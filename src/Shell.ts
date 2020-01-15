@@ -1,7 +1,7 @@
 import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
 import { Pipe } from './Pipe';
-import { tcsetattr, isatty } from './Tty';
+import { tcsetattr, isatty, tcgetattr } from './Tty';
 import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
 import { IPipe } from './Types';
 
@@ -16,6 +16,7 @@ export const FakeShell: ProcessMain = (argv, process) => {
   }
   let currentReadHandler: IDisposable;
   let lastExitCode = 0;   // TODO: provide $? var
+  let shellTermios = tcgetattr(process.stdin);
   function showPrompt(): void {
     process.stdout.write('FakeShell> ');
   }
@@ -61,7 +62,9 @@ export const FakeShell: ProcessMain = (argv, process) => {
             result[cmdPos].cmd = sub[i];
             isCmd = false;
           } else {
-            result[cmdPos].argv.push(sub[i]);
+            if (sub[i]) {
+              result[cmdPos].argv.push(sub[i]);
+            }
           }
         }
       }
@@ -110,6 +113,7 @@ export const FakeShell: ProcessMain = (argv, process) => {
     currentReadHandler?.dispose();
     // reattach after last process is gone
     processes[processes.length - 1].afterExit(() => {
+      tcsetattr(process.stdin, shellTermios);
       currentReadHandler = process.stdin.onData(readHandler);
       showPrompt();
     });
@@ -117,6 +121,8 @@ export const FakeShell: ProcessMain = (argv, process) => {
     processes[processes.length - 1].onExit(statusCode => { lastExitCode = statusCode; });
     // run processes
     for (let i = 0; i < processes.length; ++i) {
+      // handle data === null in fg; TODO: better fg distinction
+      processes[i].stdin.onData(data => { if (data === null) processes[i].exit(); });
       processes[i].run(cmd[i].argv, {...process.env, SHELL: 'FakeShell'});
     }
   }
@@ -185,9 +191,9 @@ const WC: ProcessMain = (argv, process) => {
   process.onExit(() => process.stdout.write(`\t${gLines}\t${gWords}\t${gChars}\n`));
 
   process.stdin.onData(data => {
-    // exit rule for interactive mode
+    // last chunk is null in interactive mode
+    console.log('wc saw', [data]);
     if (data === null) {
-      process.exit();  // FIXME: move to process management, FIXME: does not print summary
       return;
     }
 
@@ -217,9 +223,14 @@ const WC: ProcessMain = (argv, process) => {
  * Testing raw mode...
  */
 const RAW: ProcessMain = (argv, process) => {
+  const oldTermios = tcgetattr(process.stdin);
+
+  process.stdout.write('Exit with Ctrl-D.\n');
+  tcsetattr(process.stdin, TERMIOS_RAW);
+
   process.stdin.onData(data => {
     if (data === '\x04') {
-      tcsetattr(process.stdin, TERMIOS_COOKED);
+      tcsetattr(process.stdin, oldTermios);
       process.exit();
       return;
     }
@@ -234,8 +245,6 @@ const RAW: ProcessMain = (argv, process) => {
     }
     process.stdout.write(`byte read: "${escaped}"\r\n`);
   });
-  process.stdout.write('Exit with Ctrl-D.\n');
-  tcsetattr(process.stdin, TERMIOS_RAW);
 }
 
 const RESET: ProcessMain = (argv, process) => {
@@ -243,16 +252,14 @@ const RESET: ProcessMain = (argv, process) => {
     tcsetattr(process.stdout, TERMIOS_COOKED);
     process.stdout.write('\x1bc');
   }
-  process.exit();
+  setTimeout(() => process.exit(), 300);
 }
 
 const CAT: ProcessMain = (argv, process) => {
   process.stdin.onData(data => {
-    if (data === null) { // FIXME: move this one level up to process management
-      process.exit();
-      return;
+    if (data !== null) {
+      process.stdout.write(data);
     }
-    process.stdout.write(data);
   });
 }
 
@@ -276,6 +283,21 @@ const EXPORT: ProcessMain = (argv, process) => {
   process.exit();
 }
 
+const LONGRUN: ProcessMain = (argv, process) => {
+  let running = true;
+  process.onExit(() => { running = false; });
+
+  async function main(): Promise<void> {
+    let counter = 0;
+    while(running) {
+      process.stdout.write(`${counter++}\n`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  main();
+};
+
 const COMMANDS: ProcessMain = (argv, process) => {
   const commands = Object.keys(KNOWN_COMMANDS);
   commands.sort((a, b) => a.localeCompare(b));
@@ -295,7 +317,8 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'wc': WC,
   'cat': CAT,
   'sleep': SLEEP,
-  'export': EXPORT
+  'export': EXPORT,
+  'longrun': LONGRUN
 };
 
 // missing commands: export, man
