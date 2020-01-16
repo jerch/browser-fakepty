@@ -1,6 +1,6 @@
 import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
-import { Pipe } from './Pipe';
+import { Pipe, getLogPipe } from './Pipe';
 import { tcsetattr, isatty, tcgetattr } from './Tty';
 import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
 import { IPipe } from './Types';
@@ -192,7 +192,6 @@ const WC: ProcessMain = (argv, process) => {
 
   process.stdin.onData(data => {
     // last chunk is null in interactive mode
-    console.log('wc saw', [data]);
     if (data === null) {
       return;
     }
@@ -225,7 +224,7 @@ const WC: ProcessMain = (argv, process) => {
 const RAW: ProcessMain = (argv, process) => {
   const oldTermios = tcgetattr(process.stdin);
 
-  process.stdout.write('Exit with Ctrl-D.\n');
+  process.stdout.write('Exit with Ctrl-D.\r\n');
   tcsetattr(process.stdin, TERMIOS_RAW);
 
   process.stdin.onData(data => {
@@ -298,6 +297,17 @@ const LONGRUN: ProcessMain = (argv, process) => {
   main();
 };
 
+// tee to console.log
+const LOG: ProcessMain = (argv, process) => {
+  const logWriter = getLogPipe().getWriter();
+  process.stdin.onData(data => {
+    if (data !== null) {
+      process.stdout.write(data);
+      logWriter.write(data);
+    }
+  });
+}
+
 const COMMANDS: ProcessMain = (argv, process) => {
   const commands = Object.keys(KNOWN_COMMANDS);
   commands.sort((a, b) => a.localeCompare(b));
@@ -318,7 +328,8 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'cat': CAT,
   'sleep': SLEEP,
   'export': EXPORT,
-  'longrun': LONGRUN
+  'longrun': LONGRUN,
+  'log': LOG
 };
 
 // missing commands: export, man
