@@ -2,6 +2,18 @@
 
 This library tries to mimick parts of POSIX's tty interface to be used with xterm.js in local browser mode.
 
+### So far implemented:
+- OS pipes (used as standard pipes for executables)
+- TTY with termios line discipline (as special pipe)
+- early PTY implementation (mimicking parts of `node-pty`)
+- early process object
+- ICANON based example shell `FakeShell` with limited scripting
+  - pipe support
+  - parsing of `"..."` as single argument
+  - Ctrl-D to exit running job
+  - restoring of termios settings
+- several executables in `src/Shell.ts`
+
 ### TODO:
 - identify useable/unusable termios entries
   - get ICANON on par with linux
@@ -14,7 +26,7 @@ This library tries to mimick parts of POSIX's tty interface to be used with xter
   - proper pause/resume with backpressure shim
 - init process with limited process management
 - define & cleanup interfaces
-- tests
+- tests, tests, tests
 - maybe integrate memfs as example fs impl
 
 ### Quirks to work around:
