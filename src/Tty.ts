@@ -387,7 +387,7 @@ class TermiosDiscipline implements ILineDiscipline {
     const cc = this.settings.cc;
     for (let i = 0; i < data.length; ++i) {
       let c = data[i];
-      if (iflags & IFlags.ISTRIP) c &= 0xFF;
+      if (iflags & IFlags.ISTRIP) c &= 0x7F;
       if (iflags & IFlags.IXON) {
         if (c === cc.VSTOP && !this._lnext) {
           this.pause();
@@ -414,9 +414,14 @@ class TermiosDiscipline implements ILineDiscipline {
       } else if (c === 10 && iflags & IFlags.INLCR) c = 13; // \n -> \r
 
       if (lflags & LFlags.ICANON) {
-        if (c === cc.VERASE || c === cc.VKILL || (c === cc.VWERASE && lflags & LFlags.IEXTEN)) {
-          this._erase(c);
-          continue;
+        if ((c === cc.VERASE || c === cc.VKILL || (c === cc.VWERASE && lflags & LFlags.IEXTEN)) && !this._lnext) {
+          if ((c === cc.VERASE || c === cc.VWERASE) && (lflags & LFlags.ECHOE)) {
+            this._erase(c);
+            continue;
+          } else if (c === cc.VKILL && (lflags & LFlags.ECHOK)) {
+            this._erase(c);
+            continue;
+          }
         }
         // FIXME: check lnext in other branches
         if (c === cc.VLNEXT && lflags & LFlags.IEXTEN && !this._lnext) {
@@ -432,7 +437,7 @@ class TermiosDiscipline implements ILineDiscipline {
 
         if (c === cc.VREPRINT && lflags & LFlags.ECHO && lflags & LFlags.IEXTEN && !this._lnext) {
           this._bufEcho[this._curE++] = '^'.charCodeAt(0);
-          this._bufEcho[this._curE++] = c + 0x40;
+          this._bufEcho[this._curE++] = (c + 0x40) & 0x7F;
           this._bufEcho[this._curE++] = '\n'.charCodeAt(0);
           this._bufEcho.set(this._bufOut.subarray(0, this._curO), this._curE);
           this._curE += this._curO;
@@ -442,8 +447,9 @@ class TermiosDiscipline implements ILineDiscipline {
         }
 
         if (c === 10 && !this._lnext) {
+          this._buf[this._curW++] = c;
           if (lflags & LFlags.ECHO || lflags & LFlags.ECHONL) {
-            this._buf[this._curW++] = c;
+            // FIXME: why [0] here?
             this._bufEcho[0] = c;
             this._sendL(this._bufEcho.subarray(0, 1));
           }
@@ -485,17 +491,24 @@ class TermiosDiscipline implements ILineDiscipline {
       }
 
       if (lflags & LFlags.ECHO) {
-        if (c < 0x20) {
-          this._bufEcho[this._curE++] = '^'.charCodeAt(0);
-          this._bufEcho[this._curE++] = c + 0x40;
+        // FIXME: different repr in bufOut and bufEcho?
+        // FIXME: TAB should not be escaped, print (length mod 8) whitespaces instead
+        if (c < 0x20 || c === 0x7F) {
+          if (lflags & LFlags.ECHOCTL) {
+            this._bufEcho[this._curE++] = '^'.charCodeAt(0);
+            this._bufEcho[this._curE++] = (c + 0x40) & 0x7F;
+          } else {
+            this._bufEcho[this._curE++] = c;
+          }
           if (this._lnext) {
             this._lnext = false;
             this._bufOut[this._curO++] = '^'.charCodeAt(0);
-            this._bufOut[this._curO++] = c + 0x40;
+            this._bufOut[this._curO++] = (c + 0x40) & 0x7F;
           } else {
             this._bufOut[this._curO++] = c;
           }
         } else {
+          this._lnext = false;
           this._bufEcho[this._curE++] = c;
           this._bufOut[this._curO++] = c;
         }
@@ -525,46 +538,62 @@ class TermiosDiscipline implements ILineDiscipline {
 
   /**
    * Erase handling for ICANON.
+   * 
+   * FIXME: check https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c#L979
+   * FIXME: respect utf8 multibyte, respect self generated multibytes (^[..., ^X)
+   * FIXME: simplify ECHO checks with above
+   * FIXME: implement ECHOPRT
    */
   private _erase(c: number): void {
-    // erase handling from canon buffer
-    // TODO: respect utf8 multibyte, respect self generated multibytes (^[..., ^X)
     const cc = this.settings.cc;
+    const lflags = this.settings.lflags;
     switch (c) {
       case cc.VERASE:
-        if (this._curW) {
-          this._bufEcho[this._curE++] = 8;
-          this._bufEcho[this._curE++] = 32;
-          this._bufEcho[this._curE++] = 8;
+        if (lflags & LFlags.ECHOE && this._curW) {
+          if (lflags & LFlags.ECHO) {
+            this._bufEcho[this._curE++] = 8;
+            this._bufEcho[this._curE++] = 32;
+            this._bufEcho[this._curE++] = 8;
+          }
           this._curW--;
           this._curO--;
         }
         break;
       case cc.VWERASE:
-        // strip any whitespace from right
-        while (this._curW && isspace(this._buf[this._curW - 1])) {
-          this._bufEcho[this._curE++] = 8;
-          this._bufEcho[this._curE++] = 32;
-          this._bufEcho[this._curE++] = 8;
-          this._curW--;
-          this._curO--;
-        }
-        // revert cursor before word
-        while (this._curW && !isspace(this._buf[this._curW - 1])) {
-          this._bufEcho[this._curE++] = 8;
-          this._bufEcho[this._curE++] = 32;
-          this._bufEcho[this._curE++] = 8;
-          this._curW--;
-          this._curO--;
+        if (lflags & LFlags.ECHOE) {
+          // strip any whitespace from right
+          while (this._curW && isspace(this._buf[this._curW - 1])) {
+            if (lflags & LFlags.ECHO) {
+              this._bufEcho[this._curE++] = 8;
+              this._bufEcho[this._curE++] = 32;
+              this._bufEcho[this._curE++] = 8;
+            }
+            this._curW--;
+            this._curO--;
+          }
+          // revert cursor before word
+          while (this._curW && !isspace(this._buf[this._curW - 1])) {
+            if (lflags & LFlags.ECHO) {
+              this._bufEcho[this._curE++] = 8;
+              this._bufEcho[this._curE++] = 32;
+              this._bufEcho[this._curE++] = 8;
+            }
+            this._curW--;
+            this._curO--;
+          }
         }
         break;
       case cc.VKILL:
-        while (this._curW) {
-          this._bufEcho[this._curE++] = 8;
-          this._bufEcho[this._curE++] = 32;
-          this._bufEcho[this._curE++] = 8;
-          this._curW--;
-          this._curO--;
+        if (lflags & LFlags.ECHOK) {
+          while (this._curW) {
+            if (lflags & LFlags.ECHO) {
+              this._bufEcho[this._curE++] = 8;
+              this._bufEcho[this._curE++] = 32;
+              this._bufEcho[this._curE++] = 8;
+            }
+            this._curW--;
+            this._curO--;
+          }
         }
         break;
     }
@@ -679,3 +708,5 @@ const WHITESPACE = [9, 10, 11, 12, 13, 32];
 function isspace(c: number): number {
   return ~WHITESPACE.indexOf(c);
 }
+
+// TODO: implement iscntrl, isalnum

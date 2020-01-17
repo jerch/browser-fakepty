@@ -51,9 +51,51 @@ export const enum LFlags {
   //NOFLSH = 128,   // Disable flushing the input and output queues when generating signals for the INT, QUIT, and SUSP.
   //TOSTOP = 256,   // Send the SIGTTOU signal to the process group of a bg process which tries to write to the terminal.
   //PENDIN = 16384, // All characters in the input queue are reprinted when the next character is read.
-  IEXTEN = 32768, // Enable implementation-defined input processing.
+  IEXTEN = 32768,   // Enable implementation-defined input processing.
   //EXTPROC = 65536
 }
+
+/**
+Linux
+VINTR: 0
+VQUIT: 1
+VERASE: 2
+VKILL: 3
+VEOF: 4
+VTIME: 5
+VMIN: 6
+
+VSTART: 8
+VSTOP: 9
+VSUSP: 10
+VEOL: 11
+VREPRINT: 12
+VDISCARD: 13
+VWERASE: 14
+VLNEXT: 15
+VEOL2: 16
+
+OSX (Mojave)
+VEOF: 0
+VEOL: 1
+VEOL2: 2
+VERASE: 3
+VWERASE: 4
+VKILL: 5
+VREPRINT: 6
+
+VINTR: 8
+VQUIT: 9
+VSUSP: 10
+VDSUSP: 11
+VSTART: 12
+VSTOP: 13
+VLNEXT: 14
+VDISCARD: 15
+VMIN: 16
+VTIME: 17
+VSTATUS: 18
+ */
 
 export interface CC {
     VDISCARD: number;   // (017, SI, Ctrl-O) Toggle: start/stop discarding pending output. (IEXTEN)
@@ -106,7 +148,7 @@ const DEFAULT_CC: CC = Object.freeze({
 });
 
 export const TERMIOS_COOKED: ITermios = Object.freeze({
-  iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
+  iflags: IFlags.ICRNL | IFlags.IXON | IFlags.IUTF8,
   oflags: OFlags.OPOST | OFlags.ONLCR,
   lflags: LFlags.ECHOKE | LFlags.ECHOCTL | LFlags.ECHOK | LFlags.ECHOE | LFlags.ECHO |
           LFlags.ICANON | LFlags.IEXTEN | LFlags.ISIG,
@@ -114,7 +156,7 @@ export const TERMIOS_COOKED: ITermios = Object.freeze({
 });
 
 export const TERMIOS_CBREAK: ITermios = Object.freeze({
-  iflags: IFlags.ICRNL | IFlags.ISTRIP | IFlags.IXON,
+  iflags: IFlags.ICRNL | IFlags.IXON | IFlags.IUTF8,
   oflags: OFlags.OPOST | OFlags.ONLCR,
   lflags: LFlags.ECHOKE | LFlags.ECHOCTL | LFlags.ECHOK | LFlags.ECHOE | LFlags.IEXTEN | LFlags.ISIG,
   cc: DEFAULT_CC

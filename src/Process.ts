@@ -1,9 +1,9 @@
 import { getLogPipe } from './Pipe';
 import { IPipeReader, IPipeWriter, IDisposable, IPipe } from './Types';
 
-export type ProcessMain = (args: any[], process: ProcessModule) => void;
+export type ProcessMain = (args: any[], process: IProcessModule) => void;
 
-interface ProcessModule {
+export interface IProcessModule {
   stdin: IPipeReader;
   stdout: IPipeWriter;
   stderr: IPipeWriter;
@@ -73,5 +73,30 @@ export class Process {
     while ((cleanupHandler = this._cleanupHandlers.shift())) {
       cleanupHandler();
     }
+  }
+}
+
+interface IProcessInit {
+  // ppid: number;
+  // pid: number;
+  cterm?: any | null;
+  stdin?: IPipe;
+  stdout?: IPipe;
+  stderr?: IPipe;
+  onExit?: (statusCode: number) => void;
+  afterExit?: () => void;
+}
+
+class InitProcess {
+  public ppid = 0;
+  public pid = 1;
+  public cterm: any | null = null; // TODO: interface ITty
+  public processTable: (Process | null)[] = [];
+  // TODO: where to put these?
+  public setsid(p: Process): void {}
+  public setpgid(p: Process, pid: number, pgid: number): void {}
+  public getpgid(p: Process): number { return -1; }
+  public createProcess(main: ProcessMain, argv: string[], ): number {
+    return -1;
   }
 }

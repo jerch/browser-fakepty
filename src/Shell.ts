@@ -2,8 +2,9 @@ import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
 import { Pipe, getLogPipe } from './Pipe';
 import { tcsetattr, isatty, tcgetattr } from './Tty';
-import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
+import { TERMIOS_RAW, TERMIOS_COOKED, IFlags, OFlags, LFlags } from './Termios';
 import { IPipe } from './Types';
+import STTY from './executables/stty';
 
 /**
  * Simple line based shell REPL.
@@ -113,7 +114,9 @@ export const FakeShell: ProcessMain = (argv, process) => {
     currentReadHandler?.dispose();
     // reattach after last process is gone
     processes[processes.length - 1].afterExit(() => {
-      tcsetattr(process.stdin, shellTermios);
+      // dont restore old termios settings by default to allow stty changes take effect
+      // NOTE: to still recover from raw settings: LF reset LF (LF is Ctrl-J)
+      // tcsetattr(process.stdin, shellTermios);
       currentReadHandler = process.stdin.onData(readHandler);
       showPrompt();
     });
@@ -128,6 +131,7 @@ export const FakeShell: ProcessMain = (argv, process) => {
   }
 
   // primitive REPL
+  let cmdstring = '';
   const readHandler = (data: string) => {
     if (data === null) {
       // shell exit
@@ -135,11 +139,15 @@ export const FakeShell: ProcessMain = (argv, process) => {
       return;
     }
     // FIXME: write handling of messed up termios settings (entry for `reset`)
+    cmdstring += data;
 
     // parse, eval and run
-    const cmd = parseCommand(data);
-    if (evalCommand(cmd)) runCommand(cmd);
-    else showPrompt();
+    if (cmdstring.endsWith('\n')) {
+      const cmd = parseCommand(cmdstring);
+      cmdstring = '';
+      if (evalCommand(cmd)) runCommand(cmd);
+      else showPrompt();
+    }
   }
 
   process.onExit(() => process.stdout.write('\n[Exiting FakeShell]\n'));
@@ -165,17 +173,11 @@ const ECHO: ProcessMain = (argv, process) => {
   process.stdout.write(
     argv.join(' ')
       .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
       .replace(/\\x([0-9A-Fa-f][0-9A-Fa-f])/g, (m, p1) => String.fromCharCode(parseInt(p1, 16)))
     + '\n'
   );
-  process.exit();
-}
-
-/**
- * stty to maintain termios.
- */
-const STTY: ProcessMain = (argv, process) => {
-  process.stdout.write('Not yet implemented...\n');
   process.exit();
 }
 
@@ -332,6 +334,5 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'log': LOG
 };
 
-// missing commands: export, man
 // missing shell operators: &&, ||, ;, redirects
 // missing process primitives: cterm, fg, bg
