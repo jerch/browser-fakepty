@@ -290,6 +290,10 @@ class Tty implements IPipe {
 /**
  * Inspired from linux n_tty
  * @see https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c
+ *
+ * FIXME: missing handling for IMAXBEL, IUTF8, IGNBRK, BRKINT
+ * FIXME: check missing post symbols (OLCUC, others?)
+ * TODO: Should we implement any of the skipped termios symbols?
  */
 class TermiosDiscipline implements ILineDiscipline {
   private _lReceiver: (data: string) => void;
@@ -399,7 +403,6 @@ class TermiosDiscipline implements ILineDiscipline {
         }
         if (this.paused && iflags & IFlags.IXANY && c !== cc.VINTR && c !== cc.VQUIT && c !== cc.VSUSP) {
           this.resume();
-          // continue;      // FIXME: need to consume char here?
         }
       }
       if (lflags & LFlags.ISIG && !this._lnext) {
@@ -538,7 +541,7 @@ class TermiosDiscipline implements ILineDiscipline {
 
   /**
    * Erase handling for ICANON.
-   * 
+   *
    * FIXME: check https://github.com/torvalds/linux/blob/04ce9318898b294001459b5d705795085a9eac64/drivers/tty/n_tty.c#L979
    * FIXME: respect utf8 multibyte, respect self generated multibytes (^[..., ^X)
    * FIXME: simplify ECHO checks with above
@@ -604,9 +607,11 @@ class TermiosDiscipline implements ILineDiscipline {
     console.log('signal to send:', TtySignal[sig]);
   }
   public resume(): void {
+    this.paused = false;
     console.log('resume: not implemented');
   }
   public pause(): void {
+    this.paused = true;
     console.log('pause: not implemented');
   }
   public paused = false;
@@ -620,6 +625,44 @@ class TermiosDiscipline implements ILineDiscipline {
  * - onData multiplexer
  * - close event
  * - kill handling
+ * - proper flow control/backpressure
+ *    --> what about input chain?
+ *    IXOFF is typically not implemented on ptys,
+ *    the kernel instead relies on blocking/partial writes.
+ *    xterm.js has no output flow control (in fact it has no means to block a user
+ *    from entering more and more data), which is for typed input no problem,
+ *    but might overwhelm the tty buffer for very big pasted content.
+ *
+ *    Workaround (in hope no one pastes GBs of data is a few seconds), roughly:
+ *
+ *      ```javascript
+ *      xterm.onData(data => pty.write(data)); // no blocking or flow control here possible
+ *
+ *      pty.write(data) {
+ *        if (DISCARD_LIMIT ...) // basic sanity check to avoid OOM
+ *        this._internalBuffer.push(data);
+ *        setTimeout(() => this._handle(), 0);
+ *      }
+ *      pty._handle() {
+ *        if (this._ldisc.lineWritable && this._internalBuffer.length) {
+ *          chunk = ...;                  // get data from buffer and adjust buffer
+ *          this._ldisc.recvL(chunk);     // ldisc itself is sync code up to the process pipe (tty) and line output
+ *        }
+ *        if (this._internalBuffer.length) {
+ *          setTimeout(() => this._handle(), 0);
+ *        }
+ *      }
+ *      ```
+ *
+ *    Output chains:
+ *      - process pipe: non blocking write with flow indicator as return value - `pipe.write(...): boolean`
+ *      - line output: flow indicator as callback of `xterm.write(..., callback): void`
+ *      - ldisc must wait on either chain and only resume if both are free to go - possible with promise resolver
+ *
+ *    obstacles:
+ *      - bad perf, complicated model: reduce event loop invocation (setTimeout, promises)
+ *      - deadlocks?
+ *      - document correct usage of non blocking pipe writes (max chunks/chunksize, respect return value)
  */
 export class Pty {
   private _tty: Tty;
