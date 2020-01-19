@@ -25,8 +25,6 @@ export class Process {
     this.stderr = this._stderr.getWriter();
   }
   public run(args: any[], environ: {[key: string]: string}) {
-    this._stdin.onClose(() => this.exit());
-    this._stdout.onClose(() => this.exit());
     this._runner(args, {
       stdin: this.stdin,
       stdout: this.stdout,

@@ -676,9 +676,12 @@ export class Pty {
     this._tty = new Tty(this._ldisc);
     this._ldisc.registerProcessReceiver(this._tty.writeToProcess.bind(this._tty));
     this._p = new Process(command, this._tty, this._tty, this._tty);
+    // FIXME: closing ptm should actually be the shell's responsibility
     this._p.afterExit(() => this.close());
   }
   public close(): void {
+    // FIXME: implement SIGHUP
+    console.log('should close/dispose tty/pty resources...');
     this._p = null;
     this._tty.close();
     this._tty = null;
