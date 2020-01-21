@@ -234,7 +234,7 @@ class Tty implements IPipe {
       throw new Error('discarding write data');
     }
     this.newLDisc.recvP(data);
-    return; // TODO
+    return false; // TODO: process flow control, currently stops after one write
 
     // update writable flag
     if (this.writable) {
@@ -367,8 +367,13 @@ class TermiosDiscipline implements ILineDiscipline {
   public recvP(data: string): void {
     const bytes = this._encoder.encode(data);
     this._bufEcho.set(bytes, this._curE);
-    this._curE = bytes.length;
+    this._curE += bytes.length;
     this._flush();
+    /**
+     * TODO: boolean return as backpressure indicator
+     * - limit single chunk size above in TTY
+     * - do some buffer watermarking depending on this._curE
+     */
   }
 
   private _buf = new Uint8Array(MAX_LIMIT);
