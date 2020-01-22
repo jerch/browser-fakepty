@@ -298,7 +298,7 @@ const LONGRUN: ProcessMain = (argv, process) => {
     let counter = 0;
     while(running) {
       process.stdout.write(`${counter++}\n`);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
 
@@ -318,6 +318,23 @@ const LOG: ProcessMain = (argv, process) => {
     logWriter.write(data);
   });
 }
+
+const CCAT: ProcessMain = (argv, process) => {
+  const w = new Worker('/c_test/cat.js');
+  w.onmessage = (msg: MessageEvent) => {
+    process.stdout.write(msg.data);
+  }
+  w.postMessage('RUN');
+  process.stdin.onData(data => {
+    if (data === null) {
+      w.postMessage('EOF');
+      process.exit();
+      setTimeout(() => w.terminate(), 50);
+      return;
+    }
+    w.postMessage(data);
+  });
+};
 
 const COMMANDS: ProcessMain = (argv, process) => {
   const commands = Object.keys(KNOWN_COMMANDS);
@@ -340,7 +357,8 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'sleep': SLEEP,
   'export': EXPORT,
   'longrun': LONGRUN,
-  'log': LOG
+  'log': LOG,
+  'ccat': CCAT
 };
 
 // missing shell operators: &&, ||, ;, redirects
