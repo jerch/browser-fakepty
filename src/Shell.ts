@@ -2,9 +2,10 @@ import { ProcessMain, Process } from './Process';
 import { IDisposable } from 'xterm';
 import { Pipe, getLogPipe } from './Pipe';
 import { tcsetattr, isatty, tcgetattr } from './Tty';
-import { TERMIOS_RAW, TERMIOS_COOKED, IFlags, OFlags, LFlags } from './Termios';
+import { TERMIOS_RAW, TERMIOS_COOKED } from './Termios';
 import { IPipe } from './Types';
 import STTY from './executables/stty';
+import HEADERS from './executables/headers';
 
 /**
  * Simple line based shell REPL.
@@ -326,6 +327,7 @@ const CCAT: ProcessMain = (argv, process) => {
   }
   w.postMessage('RUN');
   process.stdin.onData(data => {
+    console.log([data]);
     if (data === null) {
       w.postMessage('EOF');
       process.exit();
@@ -358,7 +360,8 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'export': EXPORT,
   'longrun': LONGRUN,
   'log': LOG,
-  'ccat': CCAT
+  'ccat': CCAT,
+  'headers': HEADERS
 };
 
 // missing shell operators: &&, ||, ;, redirects

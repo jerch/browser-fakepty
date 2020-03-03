@@ -1,6 +1,8 @@
 #include <emscripten.h>
 #include <stdio.h>
 #include <unistd.h>
+//#include <fakepty_termios.h>
+//#include <fakepty_tty_ioctl.h>
 #include <termios.h>
 
 /**
@@ -95,13 +97,30 @@ EM_JS(char, putchar_js, (char c), {
   process.stdout.write(String.fromCharCode(c));
 });
 
-EM_JS(int, isatty_js, (int fd), {
-  return require('tty').isatty(fd);
+
+EM_JS(void, fill_termios, (
+  struct termios *p,
+  size_t bytes,
+  unsigned int *iflags,
+  unsigned int *oflags,
+  unsigned int *lflags,
+  unsigned char *cc
+), {
+  console.log('offset & size:', p, bytes);
+  console.log('adresses:', iflags, oflags, lflags, cc);
+  Module.setValue(iflags, 12345, 'i32');
+  Module.setValue(oflags, 45678, 'i32');
+  Module.setValue(lflags, 666, 'i32');
 });
+
 
 int main() {
   startup();
-  //struct termios p;
+  struct termios p;
+  fill_termios(&p, sizeof(struct termios), &p.c_iflag, &p.c_oflag, &p.c_lflag, &p.c_cc[0]);
+  printf("termios filled: %d %d %d\n", p.c_iflag, p.c_oflag, p.c_lflag);
+  printf("termios size: %d\n", sizeof(p));
+  printf("cc offset: %d\n", ((int) &(p.c_cc)) - ((int) &p));
   //tcsetattr(0, 0, &p);
   //printf("tty: %d %d\n", isatty(0), isatty_js(0));
   char c;

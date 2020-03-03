@@ -304,6 +304,13 @@ class TermiosDiscipline implements ILineDiscipline {
   constructor(public settings: ITermios) {}
 
   /**
+   * C lib friendly termios interface.
+   */
+  public tty_ioctl(): void {
+
+  }
+
+  /**
    * Register a line receiver. Any data from `_sendL` will be sent to that receiver.
    * This is the entry point for `Pty.onData` handler.
    * Only a single callback is currently supported.
@@ -761,3 +768,139 @@ function isspace(c: number): number {
 }
 
 // TODO: implement iscntrl, isalnum
+
+// TODO: write ioctl interface with C headers
+// TODO: limit ioctls to the minimum, use linux values
+export enum TTY_IOCTL {
+  TCGETS,           // Equivalent to tcgetattr(fd, argp).                   struct termios *
+  TCSETS,           // Equivalent to tcsetattr(fd, TCSANOW, argp).          const struct termios *
+  TCSETSW,          // Equivalent to tcsetattr(fd, TCSADRAIN, argp).        const struct termios *
+  TCSETSF,          // Equivalent to tcsetattr(fd, TCSAFLUSH, argp).        const struct termios *
+  //TCGETA,           // No termio support.
+  //TCSETA,           // No termio support.
+  //TCSETAW,          // No termio support.
+  //TCSETAF,          // No termio support.
+  //TIOCGLCKTRMIOS,   // Gets the locking status of the termios structure of the terminal.
+  //TIOCSLCKTRMIOS,   // Sets the locking status of the termios structure of the terminal. (only root)
+  TIOCGWINSZ,       // Get window size.                                     struct winsize *
+  TIOCSWINSZ,       // Set window size.                                     const struct winsize *
+  //TCSBRK,           // Equivalent to tcsendbreak(fd, arg).
+  //TCSBRKP,          // "POSIX version" of TCSBRK. (see manpage)
+  //TIOCSBRK,         // Turn break on, that is, start sending zero bits.
+  //TIOCCBRK,         // Turn break off, that is, stop sending zero bits.
+  //TCXONC,           // Equivalent to tcflow(fd, arg).
+  //FIONREAD,         // Get the number of bytes in the input buffer.
+  //TIOCINQ,          // Same as FIONREAD.
+  //TIOCOUTQ,         // Get the number of bytes in the output buffer.
+  //TCFLSH,           // Equivalent to tcflush(fd, arg).
+  //TIOCSTI,          // Insert the given byte in the input queue.
+  //TIOCCONS,         // Redirecting console output. (see manpage)
+  TIOCSCTTY,        // Make the given terminal the controlling terminal of the calling process.
+  TIOCNOTTY,        // If the terminal was the controlling terminal of the calling process, give it up.
+  TIOCGPGRP,        // When successful, equivalent to *argp = tcgetpgrp(fd).    pid_t *
+  TIOCSPGRP,        // Equivalent to tcsetpgrp(fd, *argp).                      const pid_t *
+  TIOCGSID,         // Get the session ID of the given terminal.                ?? (prolly pid_t *)
+  //TIOCEXCL,         // Put the terminal into exclusive mode.
+  //TIOCNXCL,         // Disable exclusive mode.
+  TIOCGETD,         // Get the line discipline of the terminal.                 int *
+  TIOCSETD,         // Set the line discipline of the terminal.                 const int *
+  //TIOCPKT,          // Enable (when *argp is nonzero) or disable packet mode. (see manpage)
+  //TIOCMGET,       // No modem support.
+  //TIOCMSET,       // No modem support.
+  //TIOCMBIC,       // No modem support.
+  //TIOCMBIS        // No modem support.
+  //TIOCGSOFTCAR,   // Get the status of the CLOCAL flag. Unsupported, always assuming CLOCAL.
+  //TIOCSSOFTCAR,   // Set the CLOCAL flag. Unsupported, always assuming CLOCAL.
+  //TIOCLINUX,      // Unsupported.
+  //TIOCTTYGSTRUCT, // Unsupported.
+
+}
+
+// C sequence to initialize a pty
+
+// create new pty, returns master fd
+function openpt(flag: any): number {
+  // TODO: create Pty instance
+  // FIXME: create duplex pipe endpoint as IReaderWriter
+  // TODO: attach pty ReaderWriter to next fd
+  return 0;  // -1 + ERRNO
+}
+
+// chown of pts (see manpage)
+function grantpt(masterfd: number): number {
+  // prolly stubbed out (no permission rule set yet)
+  return 0;
+}
+
+// unlock tty (should we start locked?)
+function unlockpt(masterfd: number): number {
+  // prolly stubbed out (makes not much sense w'o a permission rule set)
+  return 0;
+}
+
+// get corresponding slave path
+function ptsname(masterfd: number): string {
+  // FIXME: establish lightweight FS abstraction with open/read/close and tty flags (O_NOCTTY)
+  // FIXME: write slave entry in FS
+  return '';
+}
+
+/**
+ * How can this work from C w'o fork/exec?
+ * 
+ * example:
+ * 
+ * ```C
+ *  int main() {
+ *    int master = openpt(O_RDWR | O_NOCTTY);           // sync: spawn new Pty with ReaderWriter and register in FS
+ *    grantpt(master);                                  // sync: stubbed out
+ *    unlockpt(master);                                 // sync: stubbed out
+ *    char *slavepath = ptsname(master);                // sync: return registered FS name
+ *    int slave = open(slavepath, O_RDWR | O_NOCTTY);   // sync: create new TTY ReaderWriter
+ *    pid_t slave_process = fake_spawn(                 // sync: new process as session leader with controlling TTY
+ *      path_to_executable, slave, slave, slave);
+ *    ...
+ *    // interact                                       // async: read/write interaction is always async
+ *    ...
+ *    // exit1
+ *    close(master);                                    // async: send SIGHUP --> should notify/exit slave side
+ *    // exit2
+ *    kill(slave_process, 15);                          // async: request termination (9 - kill prolly not doable)
+ *    wait(...);                                        // async: always async?
+ *  }                                                   // sync: process exit
+ *                                                      // async: after exit - close all fds (might involve signals)
+ * ```
+ * 
+ */
+
+interface IWinsize {
+  row: number;
+  col: number;
+  xpixel: number;
+  ypixel: number;
+}
+interface ISpawnPtyResult {
+  pty: Pty;
+  process: Process;
+}
+/**
+ * high level function similar to forkpty + exec.
+ */
+function spawnpty(command: ProcessMain, argv: string[], termios: ITermios, winsize: IWinsize): ISpawnPtyResult {
+  const pty = new Pty(command, argv, {termios, winsize});
+  return {pty: pty, process: (pty as any)._p};
+}
+/**
+ * in C:
+ * 
+ * ```C
+ * pid_t forkpty(int *amaster, char *name,
+ *               const struct termios *termp,
+ *               const struct winsize *winp);
+ * 
+ * pid_t spawnpty(int *amaster, char *name,
+ *                const struct termios *termp,
+ *                const struct winsize *winp,
+ *                const char *pathname, char *const argv[], char *const envp[]);
+ * ```
+ */

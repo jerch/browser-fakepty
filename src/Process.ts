@@ -116,7 +116,7 @@ interface KProcess {
   files: TFileLikeNull[];
 }
 
-function k_insert_fd(file: TFileLike, table: TFileLikeNull[]): number {
+function k_table_insert_file(file: TFileLike, table: TFileLikeNull[]): number {
   for (let i = 0; i < table.length; ++i) {
     if (table[i] === null) {
       table[i] = file;
@@ -127,7 +127,7 @@ function k_insert_fd(file: TFileLike, table: TFileLikeNull[]): number {
   return table.length - 1;
 }
 
-function k_remove_fd(file: TFileLike, table: TFileLikeNull[]): number {
+function k_table_remove_file(file: TFileLike, table: TFileLikeNull[]): number {
   for (let i = 0; i < table.length; ++i) {
     if (table[i] === file) {
       table[i] = null;
@@ -137,29 +137,17 @@ function k_remove_fd(file: TFileLike, table: TFileLikeNull[]): number {
   return -1;
 }
 
-function k_clone_fds(table: TFileLikeNull[]): TFileLikeNull[] {
-  const nTable: TFileLikeNull[] = [];
-  for (let i = 0; i < table.length; ++i) {
-    // TODO: check for CLOEXEC
-    const file = table[i];
-    if (file) {
-      nTable.push(file);  // TODO: write a clone function
-    }
-  }
-  return nTable;
-}
-
 function k_pipe(p: KProcess): {reader: IPipeReader, writer: IPipeWriter} {
   const pipe = new Pipe();
   const reader = pipe.getReader();
   const writer = pipe.getWriter();
-  k_insert_fd(reader, p.files);
-  k_insert_fd(writer, p.files);
+  k_table_insert_file(reader, p.files);
+  k_table_insert_file(writer, p.files);
   return {reader, writer};
 }
 
 function k_close(p: KProcess, file: TFileLike): void {
-  k_remove_fd(file, p.files);
+  k_table_remove_file(file, p.files);
   file.close();
 }
 
