@@ -13,7 +13,29 @@ if (typeof queueMicrotask === 'undefined') {
   var queueMicrotask = ((cb: () => void) => Promise.resolve().then(cb).catch((err: any) => setTimeout(() => { throw err }, 0))) as (cb: () => void) => void;
 }
 
-
+/**
+ * PipePort.
+ * PipePort is an opened end to a pipe, that can be read or written.
+ * It basically resembles actions of a pipe file descriptor to be used from a process.
+ * 
+ * Supports:
+ * - limited open flags
+ * - syscall endpoints:
+ *    - read / write
+ *    - ctl (mixture of ioctl/fnctl) TODO: revamp
+ *    - poll
+ *    - dup
+ *    - close
+ *    - lseek (always failing)
+ * 
+ * TODO:
+ * - Do we need nonblocking read/write?
+ *    This should be supported from an interface capabilities viewpoint, still its not very useful,
+ *    as nonblocking read/write means, that we dont leave the caller context (non-blocking for the caller),
+ *    which might lead to "blocking" of the main thread as we miss a chance to do a context switch.
+ *    --> make syscalls always blocking / callback based
+ * - generalize interface to be used with TTYs and files later on
+ */
 export class FasterPipePort implements IFasterPipePort {
   public isReader = false;  // whether this port can read
   public isWriter = false;  // whether this port can write
@@ -140,8 +162,8 @@ export class FasterPipe {
   public _readers = 0;
   public _writers = 0;
   public fifo = new FifoBuffer(PIPE_BUF);
-  public wBuffer: IDeferredChunk[] = [];   // pending write chunks
-  public rBuffer: IDeferredChunk[] = [];   // pending read chunks
+  public wBuffer: IDeferredChunk[] = [];  // pending write chunks
+  public rBuffer: IDeferredChunk[] = [];  // pending read chunks
   public pendingLength = 0;               // length of pending write chunks
   private _pendingResolve = false;
 

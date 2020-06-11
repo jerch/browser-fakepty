@@ -24,6 +24,13 @@ export class FifoBuffer {
     this.mask32 = this.mask >> 2;
   }
 
+  public reset(): void {
+    // TODO: test case
+    this.rCur = 0;
+    this.wCur = 0;
+    this.size = 0;
+  }
+
   public get space(): number {
     return this.data.length - this .size;
   }

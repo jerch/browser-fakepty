@@ -420,6 +420,7 @@ setTimeout(() => console.log('OUTER after 50ms'), 50);
 
 
 // +++++++++++++ FasterPipe +++++++++++++++++++++++++
+/*
 async function ttt(start: number) {
   const DATA_SIZE = 1 << 20;
   const pipe = new FasterPipe();
@@ -471,7 +472,7 @@ async function ttt(start: number) {
       }
       rCount += count;
       if (!((lastWrite += 1) & 0xffff)) {
-        (window as any).term.write(dout.slice(), () => reader());
+        (window as any).term.write(dout.slice(), reader);
         return;
       } else {
         (window as any).term.write(dout.slice());
@@ -492,6 +493,7 @@ async function ttt(start: number) {
 }
 
 setTimeout(() => ttt(Date.now()), 1000);
+*/
 //ttt(Date.now());
 //ttt(Date.now());
 //ttt(Date.now());
@@ -532,3 +534,241 @@ setTimeout(() => ttt(Date.now()), 0);
 //ttt(Date.now());
 //ttt(Date.now());
 */
+
+
+
+
+//######## test blocking with sab and atomics
+/*
+function workerFunction(self: WorkerGlobalScope) {
+  let sab: SharedArrayBuffer = null;
+  let stateBuffer: Int32Array = null;
+  function write(data: any) {
+    Atomics.wait(stateBuffer, 0, 0);
+    postMessage(data);
+  }
+  function msleep(n: number) {
+    Atomics.wait(stateBuffer, 3, 0, n);
+  }
+  function run() {
+    let counter = 0;
+    while (true) {
+      write(counter);
+      counter++;
+      msleep(500);
+    }
+  }
+  onmessage = (event: MessageEvent) => {
+    postMessage(`got: ${event.data}`);
+    if (event.data instanceof SharedArrayBuffer) {
+      sab = event.data;
+      stateBuffer = new Int32Array(sab);
+      return;
+    }
+    if (event.data === 'run') {
+      run();
+    }
+  };
+}
+const blob = new Blob([`${workerFunction.toString()}; ${workerFunction.name}(self);`]);
+const worker = new Worker(window.URL.createObjectURL(blob));
+worker.onmessage = mesg => console.log(mesg);
+
+const sab = new SharedArrayBuffer(16);
+const stateBuffer = new Int32Array(sab);
+worker.postMessage(sab);
+Atomics.store(stateBuffer, 0, 1);
+Atomics.notify(stateBuffer, 0, +Infinity);
+worker.postMessage('run');
+
+(window as any)._worker = worker;
+(window as any)._state = stateBuffer;
+*/
+
+//############## test throughput with sab and worker
+
+function workerFunction(self: WorkerGlobalScope) {
+  let sab: SharedArrayBuffer = null;
+  let stateBuffer: Int32Array = null;   // [CAN_WRITE, LENGTH, IN_WRITE/IN_READ, READ, READ_LENGTH]
+  let writeBuffer: Uint8Array = null;
+  let readBuffer: Uint8Array = null;
+
+  function aquireWriteLock() {
+    let state = 1;
+    do {
+      state = Atomics.compareExchange(stateBuffer, 2, 0, 1);
+      if (state) {
+        Atomics.wait(stateBuffer, 2, -1);
+      }
+    } while (state !== 0);
+  }
+
+  function releaseWriteLock() {
+    Atomics.store(stateBuffer, 2, 0);
+  }
+
+  function write(data: Uint8Array) {
+    aquireWriteLock();
+    for (let i = 0; i < data.length; ++i) {
+      //if (Atomics.load(stateBuffer, 1) >= writeBuffer.length - 1) {
+      if (stateBuffer[1] >= writeBuffer.length - 1) {
+        releaseWriteLock();
+        postMessage('w');
+        //Atomics.wait(stateBuffer, 1, Atomics.load(stateBuffer, 1));
+        Atomics.wait(stateBuffer, 1, stateBuffer[1]);
+        aquireWriteLock();
+      }
+      //Atomics.store(writeBuffer, Atomics.add(stateBuffer, 1, 1), data[i]);
+      writeBuffer[stateBuffer[1]++] = data[i];
+    }
+    releaseWriteLock();
+    postMessage('w');
+    return data.length;
+  }
+
+  function write2(data: Uint8Array) {
+    Atomics.wait(stateBuffer, 0, 0);
+    const copy = data.slice();
+    postMessage({type: 'w', data: copy}, [copy.buffer]);
+    return data.length;
+  }
+
+  function read() {
+    Atomics.wait(stateBuffer, 3, 0);
+    const readData = readBuffer.slice(0, stateBuffer[4]);
+    Atomics.store(stateBuffer, 4, 0);
+    return readData;
+  }
+
+  function run() {
+    const start = Date.now();
+    const DATA_SIZE = 1 << 20; //1 << 20;
+    const data = new Uint8Array([65, 66, 67, 68, 69, 70, 71, 72]);
+    let written = 0;
+    while (written < DATA_SIZE) {
+      written += write(data);
+      //console.log(written);
+      //written += write2(data);
+    }
+    write(new Uint8Array([32, 69, 78, 68]));
+    //write2(new Uint8Array([32, 69, 78, 68]));
+    postMessage('DONE');
+    postMessage(written);
+    postMessage(Date.now()-start);
+  }
+
+  onmessage = (event: MessageEvent) => {
+    postMessage(`got: ${event.data}`);
+    if (event.data instanceof SharedArrayBuffer) {
+      sab = event.data;
+      stateBuffer = new Int32Array(sab, 0, 5);
+      writeBuffer = new Uint8Array(sab, 20, 512);
+      readBuffer = new Uint8Array(sab, 532);
+      console.log(writeBuffer.length, readBuffer.length);
+      return;
+    }
+    if (event.data === 'run') {
+      run();
+    }
+  };
+}
+const blob = new Blob([`${workerFunction.toString()}; ${workerFunction.name}(self);`]);
+const worker = new Worker(window.URL.createObjectURL(blob));
+
+const sab = new SharedArrayBuffer(1044);
+const stateBuffer = new Int32Array(sab, 0, 5);
+const writeBuffer = new Uint8Array(sab, 20);
+
+function aquireReadLock() {
+  if (!Atomics.load(stateBuffer, 1)) {
+    return false;
+  }
+  if (Atomics.compareExchange(stateBuffer, 2, 0, -1)) {
+    return false;
+  }
+  return true;
+}
+
+function releaseReadLock() {
+  Atomics.store(stateBuffer, 2, 0);
+  Atomics.notify(stateBuffer, 2, 10);
+}
+
+function hasReadLock() {
+  return Atomics.load(stateBuffer, 2) === -1;
+}
+
+let pendingBytes = 0;
+let readBytes = 0;
+worker.onmessage = mesg => {
+  //console.log(mesg);
+  //if (mesg.data.type) {
+  //  const data = mesg.data.data;
+  //  pendingBytes += data.length;
+  //  readBytes += data.length;
+  //  //console.log({readBytes, pendingBytes});
+  //  if (pendingBytes > 10000) {
+  //    Atomics.store(stateBuffer, 0, 0);
+  //  }
+  //  (window as any).term.write(data, () => {
+  //    pendingBytes -= data.length;
+  //    if (pendingBytes < 10000) {
+  //      Atomics.store(stateBuffer, 0, 1);
+  //      Atomics.notify(stateBuffer, 0, 10);
+  //    }
+  //  });
+
+  if (mesg.data === 'w') {
+    if (!Atomics.load(stateBuffer, 1)) return;
+    
+    const data = atomicSlice(writeBuffer);
+    if (!data) {
+      return;
+    }
+    pendingBytes += data.length;
+    (window as any).term.write(data, () => {
+      pendingBytes -= data.length;
+      if (pendingBytes < 10000 && hasReadLock()) {
+        releaseReadLock();
+        Atomics.notify(stateBuffer, 1, 10);
+      }
+    });
+  } else {
+    console.log(mesg);
+  }
+};
+
+worker.postMessage(sab);
+Atomics.store(stateBuffer, 0, 1);
+Atomics.notify(stateBuffer, 0, +Infinity);
+worker.postMessage('run');
+
+(window as any)._worker = worker;
+(window as any)._state = stateBuffer;
+(window as any)._write = writeBuffer;
+
+worker.onerror = error => console.log(error);
+
+let c = 0;
+function atomicSlice(buf: Uint8Array) {
+  if (!aquireReadLock()) {
+    return false;
+  }
+  const start = 0;
+  const end = Atomics.exchange(stateBuffer, 1, 0);
+  //const res = new Uint8Array(end - start);
+  //let pos = 0;
+  //for (let i = start; i < end; ++i) {
+  //  //res[pos++] = Atomics.load(buf, i);
+  //  res[pos++] = buf[i];
+  //}
+  const res = buf.slice(start, end);
+  c += res.length;
+  if (pendingBytes < 10000) {
+    releaseReadLock();
+    Atomics.notify(stateBuffer, 1, 10);
+  }
+  return res;
+}
+
+setTimeout(() => console.log(c), 5000);

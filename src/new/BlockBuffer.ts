@@ -5,7 +5,7 @@ export class BlockBuffer {
   public data32: Uint32Array;
   public mask: number;
   public mask32: number;
-  public cur = 0;
+  public cursor = 0;
 
   constructor(size: number) {
     const space = higherPower2(size);
@@ -16,8 +16,8 @@ export class BlockBuffer {
   }
 
   public writeByte(value: number): boolean {
-    if (this.cur < this.data.length) {
-      this.data[this.cur++] = value;
+    if (this.cursor < this.data.length) {
+      this.data[this.cursor++] = value;
       return true;
     }
     return false;
@@ -28,11 +28,11 @@ export class BlockBuffer {
   }
 
   public reset(): void {
-    this.cur = 0;
+    this.cursor = 0;
   }
 
   public read(buf: ArrayBuffer, offset: number, length: number): number {
-    if (!this.cur) return 0;
+    if (!this.cursor) return 0;
 
   }
 }
