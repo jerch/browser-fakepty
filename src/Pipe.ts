@@ -33,11 +33,15 @@ export class PipeReader implements IPipeReader {
   constructor(private _pipe: Pipe) {
     this._pipe.registerReader(this);
   }
+  private _sendEof(): void {
+    // postpone handler deletion after NULL was sent
+    this.handleChunk(null, () => {this._handlers.length = 0;});
+  }
   public close(): void {
     this._pipe.removeReader(this);
     this._closed = true;
     if (!this._pendingRead) {
-      this._handlers.length = 0;
+      this._sendEof();
     }
   }
   public onData(handler: (data: any) => void): IDisposable {
@@ -66,7 +70,7 @@ export class PipeReader implements IPipeReader {
     }
   }
   public handleChunk(data: any, callback: (success: boolean) => void): void {
-    if (!this._closed) {
+    if (!this._closed || data === null) {
       this._pendingRead = true;
       if (this._paused) {
         // we cannot handle data until resumed
@@ -78,8 +82,8 @@ export class PipeReader implements IPipeReader {
           handlers[i](data);
         }
         this._pendingRead = false;
-        if (this._closed) {
-          this._handlers.length = 0;
+        if (this._closed && data) {
+          this._sendEof();
         }
         callback(true);
       }

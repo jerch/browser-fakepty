@@ -125,7 +125,7 @@ export const FakeShell: ProcessMain = (argv, process) => {
     // run processes
     for (let i = 0; i < processes.length; ++i) {
       // handle data === null in fg; TODO: better fg distinction
-      processes[i].stdin.onData(data => { if (data === null) processes[i].exit(); });
+      //processes[i].stdin.onData(data => { if (data === null) processes[i].exit(); });
       processes[i].run(cmd[i].argv, {...process.env, SHELL: 'FakeShell'});
     }
   }
@@ -195,6 +195,7 @@ const WC: ProcessMain = (argv, process) => {
   process.stdin.onData(data => {
     // last chunk is null in interactive mode
     if (data === null) {
+      process.exit();
       return;
     }
 
@@ -258,9 +259,11 @@ const RESET: ProcessMain = (argv, process) => {
 
 const CAT: ProcessMain = (argv, process) => {
   process.stdin.onData(data => {
-    if (data !== null) {
-      process.stdout.write(data);
+    if (data === null) {
+      process.exit();
+      return;
     }
+    process.stdout.write(data);
   });
 }
 
@@ -287,12 +290,15 @@ const EXPORT: ProcessMain = (argv, process) => {
 const LONGRUN: ProcessMain = (argv, process) => {
   let running = true;
   process.onExit(() => { running = false; });
+  process.stdin.onData(data => {
+    if (data === null) process.exit();
+  });
 
   async function main(): Promise<void> {
     let counter = 0;
     while(running) {
       process.stdout.write(`${counter++}\n`);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
 
@@ -303,12 +309,32 @@ const LONGRUN: ProcessMain = (argv, process) => {
 const LOG: ProcessMain = (argv, process) => {
   const logWriter = getLogPipe().getWriter();
   process.stdin.onData(data => {
-    if (data !== null) {
-      process.stdout.write(data);
-      logWriter.write(data);
+    if (data === null) {
+      logWriter.close();
+      process.exit();
+      return;
     }
+    process.stdout.write(data);
+    logWriter.write(data);
   });
 }
+
+const CCAT: ProcessMain = (argv, process) => {
+  const w = new Worker('/c_test/cat.js');
+  w.onmessage = (msg: MessageEvent) => {
+    process.stdout.write(msg.data);
+  }
+  w.postMessage('RUN');
+  process.stdin.onData(data => {
+    if (data === null) {
+      w.postMessage('EOF');
+      process.exit();
+      setTimeout(() => w.terminate(), 50);
+      return;
+    }
+    w.postMessage(data);
+  });
+};
 
 const COMMANDS: ProcessMain = (argv, process) => {
   const commands = Object.keys(KNOWN_COMMANDS);
@@ -331,7 +357,8 @@ const KNOWN_COMMANDS: {[key: string]: ProcessMain} = {
   'sleep': SLEEP,
   'export': EXPORT,
   'longrun': LONGRUN,
-  'log': LOG
+  'log': LOG,
+  'ccat': CCAT
 };
 
 // missing shell operators: &&, ||, ;, redirects
