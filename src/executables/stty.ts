@@ -5,6 +5,13 @@ import { IFlags, OFlags, LFlags, ITermios } from '../Termios';
 
 /**
  * stty command.
+ *
+ * see https://pubs.opengroup.org/onlinepubs/009695399/utilities/cat.html
+ *
+ * TODO:
+ * - implement all needed symbols
+ * - implement default short output
+ * - document stuff in --help
  */
 
 const VERSION = 'v0.0.1';
@@ -20,7 +27,7 @@ TODO: document supported settings...\r\n`;
 
 function reprCC(n: number): string {
   if (!n) return '<undef>';
-  if (n < 0x20 || n === 0x7F) return '^' + String.fromCharCode((n + 0x40) & 0x7F); // TODO: fix cc escape in ldisc
+  if (n < 0x20 || n === 0x7F) return '^' + String.fromCharCode((n + 0x40) & 0x7F);
   else return String.fromCharCode(n);
 }
 
@@ -151,7 +158,7 @@ function handleArgs(argv: string[], t: ITermios, process: IProcessModule): numbe
     tcsetattr(process.stdin, t);
     return 0;
   }
-  
+
   // TODO: handle CC pairs
 
   // TODO: handle all other
@@ -164,10 +171,20 @@ function handleArgs(argv: string[], t: ITermios, process: IProcessModule): numbe
       case 'istrip'   : i |= IFlags.ISTRIP; break;
       case 'inlcr'    : i |= IFlags.INLCR; break;
       case 'igncr'    : i |= IFlags.IGNCR; break;
+      case 'icrnl'    : i |= IFlags.ICRNL; break;
+      case 'iuclc'    : i |= IFlags.IUCLC; break;
+      case 'ixon'     : i |= IFlags.IXON; break;
+      case 'ixany'    : i |= IFlags.IXANY; break;
+      case 'ixoff'    : i |= IFlags.IXOFF; break;
 
       case '-istrip'  : i &= ~IFlags.ISTRIP; break;
-      case '-inlcr'  : i &= ~IFlags.INLCR; break;
-      case '-igncr'  : i &= ~IFlags.IGNCR; break;
+      case '-inlcr'   : i &= ~IFlags.INLCR; break;
+      case '-igncr'   : i &= ~IFlags.IGNCR; break;
+      case '-icrnl'   : i &= ~IFlags.ICRNL; break;
+      case '-iuclc'   : i &= ~IFlags.IUCLC; break;
+      case '-ixon'    : i &= ~IFlags.IXON; break;
+      case '-ixany'   : i &= ~IFlags.IXANY; break;
+      case '-ixoff'   : i &= ~IFlags.IXOFF; break;
       // oflags
 
       // lflags
